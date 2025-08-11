@@ -1,0 +1,4 @@
+websocket-client>=1.8.0
+pandas>=2.2.2
+pyarrow>=16.1.0
+pydeephaven>=0.32.0

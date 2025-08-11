@@ -1,0 +1,19 @@
+services:
+  deephaven:
+    build: .
+    container_name: deepfeeder-dh
+    ports:
+      - "${DEEPFEEDER_GRPC_PORT}:${DEEPFEEDER_GRPC_PORT}"          # gRPC
+      - "${DEEPFEEDER_DEEPHAVEN_PORT}:${DEEPFEEDER_DEEPHAVEN_PORT}"# UI
+      - "${DEEPFEEDER_API_PORT}:${DEEPFEEDER_API_PORT}"            # API (optional)
+    environment:
+      - JAVA_TOOL_OPTIONS=-Xms1g -Xmx2g -DAuthHandlers=io.deephaven.auth.AnonymousAuthenticationHandler -Ddeephaven.application.dir=/data/app.d -Ddeephaven.application.enabled=true
+      - API_PORT=${DEEPFEEDER_API_PORT}
+    volumes:
+      - ./data:/data                                # << give DH a writable /data
+    restart: unless-stopped
+    networks: [eagle_nest]
+
+networks:
+  eagle_nest:
+    external: true
