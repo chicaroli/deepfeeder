@@ -18,7 +18,6 @@ import jpy
 # Java Instant for timestamp column
 JInstant = jpy.get_type("java.time.Instant")
 
-
 # -------------------- Feeder --------------------
 class BinanceTradeFeeder:
     def __init__(self, name: str, symbols: List[str], dt_writer: DynamicTableWriter):
@@ -51,7 +50,7 @@ class BinanceTradeFeeder:
             price = float(data.get("p") or data.get("price"))
             qty = float(data.get("q") or data.get("quantity"))
             ts_ms = int(data.get("T") or data.get("E"))
-            ts = JInstant.ofEpochMilli(ts_ms)  # real Java Instant
+            ts = JInstant.ofEpochMilli(ts_ms)  # Java Instant
             self.dt_writer.write_row(ts, symbol, price, qty, message)
         except Exception:
             traceback.print_exc()
@@ -80,7 +79,6 @@ class BinanceTradeFeeder:
                 self.ws = None
             if not self.stop_event.is_set():
                 time.sleep(1)
-
 
 # -------------------- Controller --------------------
 @dataclass
@@ -118,10 +116,7 @@ class FeederController:
     def stop_all(self) -> list[str]:
         with self._lock:
             names = list(self._registry.keys())
-        msgs = []
-        for n in names:
-            msgs.append(self.stop(n))
-        return msgs
+        return [self.stop(n) for n in names]
 
     def status(self) -> dict:
         with self._lock:
@@ -134,10 +129,8 @@ class FeederController:
                 for name in self._registry.keys()
             }
 
-
 # -------------------- App entry --------------------
 def start(app: ApplicationState):
-    # Live output table (always visible)
     writer = DynamicTableWriter({
         "ts": dht.Instant,
         "symbol": dht.string,
@@ -172,14 +165,14 @@ def start(app: ApplicationState):
         app["binance_status"] = dhpd.to_table(pd.DataFrame(rows, columns=["name","kind","symbols","alive"]))
         return "binance_status"
 
-    # Export to Applications panel (your DH version shows these under Applications)
+    # Expose to Applications panel
     app["start_feeder"] = start_feeder
     app["stop_feeder"] = stop_feeder
     app["stop_all_feeders"] = stop_all_feeders
     app["status_feeders"] = status_feeders
     app["build_status_table"] = build_status_table
 
-    # Console bindings (always available)
+    # Console bindings
     _bindings = types.ModuleType("deepfeeder_bindings")
     _bindings.start_feeder = start_feeder
     _bindings.stop_feeder = stop_feeder
@@ -190,18 +183,7 @@ def start(app: ApplicationState):
     sys.modules["deepfeeder_bindings"] = _bindings
     print("[deepfeeder] bindings module installed: import deepfeeder_bindings as dfb")
 
-    # Optional autostart
-    AUTOSTART: list[tuple[str, list[str]]] = [
-        # ("btc_only", ["btcusdt"]),
-    ]
-    for n, syms in AUTOSTART:
-        try:
-            print(start_feeder(n, syms))
-        except Exception:
-            traceback.print_exc()
-
-
-# Standard Script-Application bootstrap
+# Script-Application bootstrap
 def initialize(func):
     app = get_app_state()
     func(app)
