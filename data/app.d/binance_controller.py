@@ -165,12 +165,12 @@ def start(app: ApplicationState):
         app["binance_status"] = dhpd.to_table(pd.DataFrame(rows, columns=["name","kind","symbols","alive"]))
         return "binance_status"
 
-    # Expose to Applications panel
-    app["start_feeder"] = start_feeder
-    app["stop_feeder"] = stop_feeder
-    app["stop_all_feeders"] = stop_all_feeders
-    app["status_feeders"] = status_feeders
-    app["build_status_table"] = build_status_table
+    # # Expose to Applications panel
+    # app["start_feeder"] = start_feeder
+    # app["stop_feeder"] = stop_feeder
+    # app["stop_all_feeders"] = stop_all_feeders
+    # app["status_feeders"] = status_feeders
+    # app["build_status_table"] = build_status_table
 
     # Console bindings
     _bindings = types.ModuleType("deepfeeder_bindings")

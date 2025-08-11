@@ -38,4 +38,4 @@ binance_dashboard = ui.dashboard(
 )
 
 # Register so it appears under Applications
-app["binance_dashboard"] = binance_dashboard
+# app["binance_dashboard"] = binance_dashboard
