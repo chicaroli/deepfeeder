@@ -4,6 +4,7 @@ from deephaven.appmode import get_app_state
 from deephaven import DynamicTableWriter
 import deephaven.dtypes as dht
 
+import time
 import json, sys, types
 from threading import Thread, Event
 from typing import Dict, List
@@ -15,21 +16,33 @@ JInstant = jpy.get_type("java.time.Instant")  # Java Instant for ts column
 class BinanceFeeder:
     def __init__(self, name: str, symbols: List[str], writer: DynamicTableWriter):
         self.name, self.symbols, self.writer = name, [s.lower() for s in symbols], writer
-        self.stop_event, self.ws = Event(), None
+        self.stop_event = Event()
+        self.ws = None
         self.thread = Thread(target=self._run, daemon=True, name=f"bf:{name}")
+        self.msg_count = 0
+        self.last_msg_ts = None
+        self.last_error = None
+        self.started_at = time.time()
 
     def start(self):
-        if not self.thread.is_alive():
-            self.thread.start()
+        # Allow restart
+        if self.thread and self.thread.is_alive():
+            return "already running"
+        self.stop_event.clear()
+        self.thread = Thread(target=self._run, daemon=True, name=f"bf:{self.name}")
+        self.thread.start()
+        return "started"
 
     def stop(self):
         self.stop_event.set()
         try:
-            if self.ws: self.ws.close()
+            if self.ws:
+                self.ws.close()
         except Exception:
             pass
-        if self.thread.is_alive():
+        if self.thread and self.thread.is_alive():
             self.thread.join(timeout=3)
+        return "stopped"
 
     def _on_message(self, _ws, message: str):
         try:
@@ -37,21 +50,35 @@ class BinanceFeeder:
             ts = JInstant.ofEpochMilli(int(d.get("T") or d.get("E")))
             sym = (d.get("s") or "").lower()
             self.writer.write_row(ts, sym, float(d["p"]), float(d["q"]), message)
+            self.msg_count += 1
+            self.last_msg_ts = ts  # JInstant
         except Exception as e:
             print(f"[{self.name}] parse/write error: {e}")
 
     def _run(self):
         url = "wss://stream.binance.com:9443/stream?streams=" + "/".join(f"{s}@trade" for s in self.symbols)
+        delay = 1
         while not self.stop_event.is_set():
             try:
-                self.ws = websocket.WebSocketApp(url, on_message=self._on_message)
+                self.ws = websocket.WebSocketApp(
+                    url,
+                    on_message=self._on_message,
+                    on_error=lambda _ws, e: print(f"[{self.name}] ws error: {e}"),
+                    on_close=lambda *_: print(f"[{self.name}] ws closed"),
+                    on_open=lambda *_: print(f"[{self.name}] ws open"),
+                )
                 self.ws.run_forever(ping_interval=15, ping_timeout=10)
+                delay = 1   # reset delay on success
             except Exception as e:
+                self.last_error = str(e)
                 print(f"[{self.name}] ws error: {e}")
             finally:
                 self.ws = None
                 if not self.stop_event.is_set():
-                    import time; time.sleep(1)
+                    import random, time
+                    time.sleep(delay + random.uniform(0, 0.5))
+                    delay = min(delay * 2, 15)
+
 
 # ---- App wiring ------------------------------------------------------------
 app = get_app_state()
@@ -59,7 +86,6 @@ app = get_app_state()
 writer = DynamicTableWriter({"ts": dht.Instant, "symbol": dht.string,
                              "price": dht.double, "qty": dht.double, "raw": dht.string})
 binance_trades = writer.table
-# app["binance_trades"] = binance_trades  # openable from Applications
 
 _feeders: Dict[str, BinanceFeeder] = {}
 
@@ -74,7 +100,18 @@ def stop_feeder(name: str) -> str:
     f.stop(); return f"Feeder '{name}' stopped."
 
 def status_feeders() -> dict:
-    return {n: {"symbols": f.symbols, "alive": f.thread.is_alive()} for n, f in _feeders.items()}
+    # return {n: {"symbols": f.symbols, "alive": f.thread.is_alive()} for n, f in _feeders.items()}
+    out = {}
+    for n, f in _feeders.items():
+        out[n] = {
+            "symbols": f.symbols,
+            "alive": f.thread.is_alive(),
+            "msg_count": f.msg_count,
+            "last_msg_ts": str(f.last_msg_ts) if f.last_msg_ts else None,
+            "uptime_s": int(time.time() - f.started_at),
+            "last_error": f.last_error,
+        }
+    return out
 
 # Console bindings: import deepfeeder_bindings as dfb
 _bind = types.ModuleType("deepfeeder_bindings")
