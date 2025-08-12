@@ -19,15 +19,26 @@ def controls():
             ui.picker("binance", selected_key=provider, on_change=set_provider, label="Provider"),
             ui.text_field(label="Feeder name", value=name, on_change=set_name),     # Text Field API. :contentReference[oaicite:0]{index=0}
             ui.text_field(label="Symbols CSV", value=symbols, on_change=set_symbols),
-            ui.action_button("Start", on_press=start),
-            ui.action_button("Stop", on_press=stop),
+            ui.button_group(
+                ui.button("Start", on_press=start, variant="accent"),
+                ui.button("Stop", on_press=stop, variant="primary", style="outline", static_color="red"),
+                ui.button(
+                    "Save Config",
+                    on_press=lambda: ui.toast(dfb.upsert_config(provider, name, symbols.split(","), autostart=True))
+                    ),
+                ui.button(
+                    "Start from Config",
+                    on_press=lambda: ui.toast(dfb.start_feeder(provider, name, []))
+                    ),
+                ui.button("Stop All", on_press=lambda: ui.toast(dfb.stop_all())),
+            ),
             direction="row",
         ),
         title="Controls",
     )
 
-# Top-level dashboard with ONE child (doc rule). :contentReference[oaicite:1]{index=1}
-binance_dashboard = ui.dashboard(
+# Top-level dashboard with ONE child (doc rule)
+FeederDashboard = ui.dashboard(
     ui.column(
         controls(),
         ui.stack(
@@ -37,5 +48,5 @@ binance_dashboard = ui.dashboard(
             active_item_index=0,  # which tab opens first
         ),
         ui.panel(ui.table(dfb.status_table),  title="Feeders status (live)"),
-    )
+    ),
 )

@@ -1,0 +1,14 @@
+[
+  {
+    "provider": "binance",
+    "name": "btc_only",
+    "symbols": ["btcusdt"],
+    "autostart": true
+  },
+  {
+    "provider": "binance",
+    "name": "majors",
+    "symbols": ["ethusdt", "bnbusdt"],
+    "autostart": true
+  }
+]
