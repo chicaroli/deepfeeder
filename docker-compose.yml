@@ -6,6 +6,7 @@ services:
       - "10001:10001"   # gRPC
       - "10000:10000"   # UI
     environment:
+      PYTHONPATH: /data/app.d
       START_OPTS: >-
         -Xms1g 
         -Xmx2g 
