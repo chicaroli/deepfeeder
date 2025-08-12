@@ -30,7 +30,12 @@ def controls():
 binance_dashboard = ui.dashboard(
     ui.column(
         controls(),
-        ui.panel(ui.table(dfb.binance_trades), title="Trades"),
+        ui.stack(
+            ui.panel(ui.table(dfb.trades_table), title="Trades (canonical)"),
+            ui.panel(ui.table(dfb.binance_trades_detailed), title="Binance Trades (detailed)"),
+            ui.panel(ui.table(dfb.binance_ohlcv_1m), title="Binance OHLCV 1m"),
+            active_item_index=0,  # which tab opens first
+        ),
         ui.panel(ui.table(dfb.status_table),  title="Feeders status (live)"),
     )
 )

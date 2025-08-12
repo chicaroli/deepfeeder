@@ -5,11 +5,11 @@ import deephaven.dtypes as dht
 # Trade ticks (provider-agnostic)
 _TRADES_WRITER = DynamicTableWriter({
     "ts": dht.Instant,
+    "provider": dht.string,
     "symbol": dht.string,
     "price": dht.double,
     "qty": dht.double,
     "raw": dht.string,
-    "provider": dht.string,
 })
 
 # Feeder status (provider-agnostic)

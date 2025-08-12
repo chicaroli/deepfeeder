@@ -2,6 +2,7 @@
 import sys, types
 from core.registry import REGISTRY
 from core.bus import get_trades_table, get_status_table
+from providers.binance_schema import binance_trades_table, binance_ohlcv_1m
 
 def _norm_csv(csv: str):
     return [s.strip().lower() for s in csv.split(",") if s.strip()]
@@ -30,5 +31,8 @@ _bind.update_symbols = update_symbols
 _bind.status_feeders = status_feeders
 _bind.binance_trades = get_trades_table()
 _bind.status_table = get_status_table()
+_bind.trades_table = get_trades_table()                     # generic, cross-provider
+_bind.binance_trades_detailed = binance_trades_table()      # rich schema
+_bind.binance_ohlcv_1m = binance_ohlcv_1m()                 # derived candles
 sys.modules["deepfeeder_bindings"] = _bind
 print("[deepfeeder] bindings installed: import deepfeeder_bindings as dfb")

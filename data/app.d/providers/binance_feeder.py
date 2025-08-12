@@ -1,19 +1,23 @@
 # app.d/providers/binance_feeder.py
 from __future__ import annotations
-from threading import Thread, Event
 from typing import List
-import json, websocket, jpy, time
+import json, websocket, time
+from threading import Thread, Event
+from datetime import datetime, timezone
 
 from deephaven import DynamicTableWriter  # only for typing
+from deephaven.time import to_j_instant
+
 from core.base import BaseFeeder
 from core.bus import get_trades_writer
+from providers.binance_schema import binance_trades_writer
 
-JInstant = jpy.get_type("java.time.Instant")
 
 class BinanceFeeder(BaseFeeder):
     def __init__(self, name: str, symbols: List[str]):
         super().__init__("binance", name, symbols)
-        self._trades_writer = get_trades_writer()
+        self._detailed_writer = binance_trades_writer()     # provider-specific
+        self._bus_trades_writer = get_trades_writer()       # provider-agnostic
         self.stop_event = Event()
         self.ws = None
         self.thread = Thread(target=self._run, daemon=True, name=f"bf:{name}")
@@ -47,15 +51,38 @@ class BinanceFeeder(BaseFeeder):
 
     def _on_message(self, _ws, message: str):
         try:
-            m = json.loads(message); d = m.get("data", m)
-            ts = JInstant.ofEpochMilli(int(d.get("T") or d.get("E")))
-            sym = (d.get("s") or "").lower()
-            self._trades_writer.write_row(ts, sym, float(d["p"]), float(d["q"]), message, self.provider)
+            m = json.loads(message)
+            d = m.get("data", m)
+            ts_event = to_j_instant(datetime.fromtimestamp(int(d.get("E")) / 1000, tz=timezone.utc))
+            ts_trade = to_j_instant(datetime.fromtimestamp(int(d.get("T")) / 1000, tz=timezone.utc))
+            symbol = d.get("s").lower()
+            price = float(d.get("p"))
+            qty = float(d.get("q"))
+
+            # 1) provider-specific detailed row
+            self._detailed_writer.write_row(
+                d.get("e"),         # event type
+                ts_event,
+                d.get("s"),         # symbol
+                int(d.get("t")),    # trade id
+                price,
+                qty,
+                int(d.get("b", 0)), # buyer order id
+                int(d.get("a", 0)), # seller order id
+                ts_trade,
+                bool(d.get("m"))    # is buyer maker
+            )
+
+            # 2) canonical bus row (skinny)
+            # bus trades schema: ts, provider, symbol, price, qty, raw_json
+            self._bus_trades_writer.write_row(ts_trade, self.provider, symbol, price, qty, message)
+
+            # health/status
             self.msg_count += 1
-            self.last_msg_ts = ts
+            self.last_msg_ts = ts_trade
             self.emit_status()  # throttled
-        except Exception as e:
-            self.last_error = str(e)
+        except Exception as ex:
+            self.last_error = str(ex)
             self.emit_status(force=True)
 
     def _run(self):
