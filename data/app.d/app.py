@@ -25,6 +25,7 @@ _bind.stop_feeder = lambda provider, name: REGISTRY.stop(provider, name)
 _bind.stop_all = REGISTRY.stop_all
 _bind.update_symbols = REGISTRY.update_symbols
 _bind.status_feeders = REGISTRY.status
+_bind.reload_configs = REGISTRY.reload_configs
 # config CRUD
 _bind.upsert_config = REGISTRY.upsert_config
 _bind.remove_config = REGISTRY.remove_config

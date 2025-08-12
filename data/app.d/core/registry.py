@@ -182,6 +182,10 @@ class FeederRegistry:
         with self._lock:
             return self._configs.get(_key(provider, name))
 
+    def reload_configs(self) -> str:
+        self._load_configs()
+        return f"Loaded {len(self._configs)} configs from disk."
+
     # ----------------- runtime control -----------------
 
     def start(self, provider: str, name: str, symbols: Optional[List[str]] = None) -> str:

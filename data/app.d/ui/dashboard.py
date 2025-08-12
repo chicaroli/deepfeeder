@@ -46,6 +46,19 @@ def config_manager():
         ui.toast(dfb.stop_all())  # optional: stop current first
         ui.toast(dfb.start_all_autostart())
 
+    def load_selected_into_form():
+        if not selected_key:
+            return ui.toast("Select a config first")
+        p, n = selected_key.split(":", 1)
+        cfgs_map = {f"{c['provider']}:{c['name']}": c for c in cfgs}
+        c = cfgs_map.get(selected_key)
+        if not c:
+            return ui.toast("Config not found")
+        set_provider(c["provider"])
+        set_name(c["name"])
+        set_symbols_csv(",".join(c["symbols"]))
+        set_autostart(bool(c.get("autostart", False)))
+
     return ui.panel(
         ui.column(
             ui.flex(
@@ -54,6 +67,9 @@ def config_manager():
                 ui.action_button("Stop Selected", on_press=stop_selected),
                 ui.action_button("Remove Selected", on_press=remove_selected),
                 ui.action_button("Refresh", on_press=lambda: set_refresh(refresh + 1)),
+                ui.action_button("Load → Form", on_press=load_selected_into_form),
+                ui.action_button("Reload from disk",
+                                 on_press=lambda: (ui.toast(dfb.reload_configs()), set_refresh(refresh + 1))),
                 direction="row",
             ),
             ui.flex(

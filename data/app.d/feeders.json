@@ -8,7 +8,7 @@
   {
     "provider": "binance",
     "name": "majors",
-    "symbols": ["ethusdt", "bnbusdt"],
+    "symbols": ["ethusdt"],
     "autostart": true
   }
 ]
