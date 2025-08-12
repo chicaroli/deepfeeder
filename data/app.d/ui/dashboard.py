@@ -47,11 +47,15 @@ def feeders_toolbar():
         ui.flex(
             ui.picker(*keys, selected_key=selected_key, on_change=set_selected_key, label="Feeders"),
             ui.button_group(
-                ui.button("Start Selected", on_press=start_selected, variant="primary", style="outline"),
-                ui.button("Stop Selected", on_press=stop_selected, variant="primary", style="outline"),
+                ui.button("Start", on_press=start_selected, variant="primary", style="outline"),
+                ui.button("Stop", on_press=stop_selected, variant="primary", style="outline"),
+                orientation="vertical",
+            ),
+            ui.button_group(
                 ui.button("Start All", on_press=start_all, variant="accent"),
                 ui.button("Stop All", on_press=stop_all, variant="accent"),
-                ui.button("Reload/Refresh", on_press=reload_from_disk, variant="primary", style="outline"),
+                ui.button("Reload", on_press=reload_from_disk, variant="primary", style="outline"),
+                orientation="vertical",
             ),
             direction="row",
         ),
@@ -63,20 +67,21 @@ FeederDashboard = ui.dashboard(
     ui.column(
         # Top area (30%)
         ui.row(
-            ui.column(
-                feeders_toolbar(),
+            feeders_toolbar(),
+            ui.stack(
                 ui.panel(ui.table(dfb.status_table), title="Feeders status (live)"),
+                ui.panel(ui.table(dfb.configs_live_table), title="Configs (live)"),
+                active_item_index=0,
             ),
-            height=40,
+            height=25,
         ),
         # Bottom area (70%) – the tabbed stack
         ui.stack(
             ui.panel(ui.table(dfb.trades_table), title="Trades (canonical)"),
             ui.panel(ui.table(dfb.binance_trades_detailed), title="Binance Trades (detailed)"),
             ui.panel(ui.table(dfb.binance_ohlcv_1m), title="Binance OHLCV 1m"),
-            ui.panel(ui.table(dfb.configs_live_table), title="Configs (live)"),
             active_item_index=0,
-            height=60,
+            height=75,
         ),
     ),
 )

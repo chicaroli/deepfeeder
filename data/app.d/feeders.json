@@ -3,18 +3,18 @@
     "provider": "binance",
     "name": "btc",
     "symbols": ["btcusdt"],
-    "autostart": true
+    "autostart": false
   },
   {
     "provider": "binance",
     "name": "eth",
     "symbols": ["ethusdt"],
-    "autostart": true
+    "autostart": false
   },
   {
     "provider": "binance",
     "name": "others",
-    "symbols": ["btcusdt", "ethusdt", "ltcusdt", "solusdt"],
-    "autostart": true
+    "symbols": ["ltcusdt", "solusdt", "maticusdt", "avaxusdt"],
+    "autostart": false
   }
 ]
