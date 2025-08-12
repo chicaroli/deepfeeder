@@ -1,32 +1,22 @@
 # /data/app.d/binance_controller.py
 from __future__ import annotations
-
-from deephaven.appmode import ApplicationState, get_app_state
+from deephaven.appmode import get_app_state
 from deephaven import DynamicTableWriter
 import deephaven.dtypes as dht
 
-from dataclasses import dataclass
-from threading import Thread, Event, Lock
+import json, sys, types
+from threading import Thread, Event
 from typing import Dict, List
-import json, time, traceback
-import websocket
-import sys, types
-import pandas as pd
-from deephaven import pandas as dhpd
-import jpy
+import websocket, jpy
 
-# Java Instant for timestamp column
-JInstant = jpy.get_type("java.time.Instant")
+JInstant = jpy.get_type("java.time.Instant")  # Java Instant for ts column
 
-# -------------------- Feeder --------------------
-class BinanceTradeFeeder:
-    def __init__(self, name: str, symbols: List[str], dt_writer: DynamicTableWriter):
-        self.name = name
-        self.symbols = [s.lower() for s in symbols]
-        self.dt_writer = dt_writer
-        self.stop_event = Event()
-        self.thread = Thread(target=self._run, name=f"Feeder-{name}", daemon=True)
-        self.ws = None
+# ---- Minimal feeder --------------------------------------------------------
+class BinanceFeeder:
+    def __init__(self, name: str, symbols: List[str], writer: DynamicTableWriter):
+        self.name, self.symbols, self.writer = name, [s.lower() for s in symbols], writer
+        self.stop_event, self.ws = Event(), None
+        self.thread = Thread(target=self._run, daemon=True, name=f"bf:{name}")
 
     def start(self):
         if not self.thread.is_alive():
@@ -35,157 +25,60 @@ class BinanceTradeFeeder:
     def stop(self):
         self.stop_event.set()
         try:
-            if self.ws is not None:
-                self.ws.close()
+            if self.ws: self.ws.close()
         except Exception:
             pass
         if self.thread.is_alive():
-            self.thread.join(timeout=5)
+            self.thread.join(timeout=3)
 
     def _on_message(self, _ws, message: str):
         try:
-            msg = json.loads(message)
-            data = msg.get("data", msg)  # handle multi-stream or single
-            symbol = (data.get("s") or data.get("symbol") or "").lower()
-            price = float(data.get("p") or data.get("price"))
-            qty = float(data.get("q") or data.get("quantity"))
-            ts_ms = int(data.get("T") or data.get("E"))
-            ts = JInstant.ofEpochMilli(ts_ms)  # Java Instant
-            self.dt_writer.write_row(ts, symbol, price, qty, message)
-        except Exception:
-            traceback.print_exc()
-
-    def _on_error(self, _ws, err):
-        print(f"[{self.name}] WS error:", err)
-
-    def _on_close(self, _ws, _a, _b):
-        print(f"[{self.name}] WS closed")
+            m = json.loads(message); d = m.get("data", m)  # multi-stream or single
+            ts = JInstant.ofEpochMilli(int(d.get("T") or d.get("E")))
+            sym = (d.get("s") or "").lower()
+            self.writer.write_row(ts, sym, float(d["p"]), float(d["q"]), message)
+        except Exception as e:
+            print(f"[{self.name}] parse/write error: {e}")
 
     def _run(self):
-        streams = "/".join([f"{s}@trade" for s in self.symbols])
-        url = f"wss://stream.binance.com:9443/stream?streams={streams}"
+        url = "wss://stream.binance.com:9443/stream?streams=" + "/".join(f"{s}@trade" for s in self.symbols)
         while not self.stop_event.is_set():
             try:
-                self.ws = websocket.WebSocketApp(
-                    url,
-                    on_message=self._on_message,
-                    on_error=self._on_error,
-                    on_close=self._on_close,
-                )
+                self.ws = websocket.WebSocketApp(url, on_message=self._on_message)
                 self.ws.run_forever(ping_interval=15, ping_timeout=10)
-            except Exception:
-                traceback.print_exc()
+            except Exception as e:
+                print(f"[{self.name}] ws error: {e}")
             finally:
                 self.ws = None
-            if not self.stop_event.is_set():
-                time.sleep(1)
+                if not self.stop_event.is_set():
+                    import time; time.sleep(1)
 
-# -------------------- Controller --------------------
-@dataclass
-class FeederInfo:
-    name: str
-    kind: str
-    symbols: List[str]
+# ---- App wiring ------------------------------------------------------------
+app = get_app_state()
 
-class FeederController:
-    def __init__(self, writer: DynamicTableWriter):
-        self._lock = Lock()
-        self._registry: Dict[str, BinanceTradeFeeder] = {}
-        self._meta: Dict[str, FeederInfo] = {}
-        self._writer = writer
+writer = DynamicTableWriter({"ts": dht.Instant, "symbol": dht.string,
+                             "price": dht.double, "qty": dht.double, "raw": dht.string})
+binance_trades = writer.table
+# app["binance_trades"] = binance_trades  # openable from Applications
 
-    def start_binance(self, name: str, symbols: List[str]) -> str:
-        with self._lock:
-            if name in self._registry:
-                return f"Feeder '{name}' already running."
-            feeder = BinanceTradeFeeder(name=name, symbols=symbols, dt_writer=self._writer)
-            self._registry[name] = feeder
-            self._meta[name] = FeederInfo(name=name, kind="binance_trade", symbols=symbols)
-            feeder.start()
-            return f"Feeder '{name}' started."
+_feeders: Dict[str, BinanceFeeder] = {}
 
-    def stop(self, name: str) -> str:
-        with self._lock:
-            feeder = self._registry.pop(name, None)
-            self._meta.pop(name, None)
-        if feeder is None:
-            return f"Feeder '{name}' not found."
-        feeder.stop()
-        return f"Feeder '{name}' stopped."
+def start_feeder(name: str, symbols: List[str]) -> str:
+    if name in _feeders: return f"Feeder '{name}' already running."
+    f = BinanceFeeder(name, symbols, writer); _feeders[name] = f; f.start()
+    return f"Feeder '{name}' started."
 
-    def stop_all(self) -> list[str]:
-        with self._lock:
-            names = list(self._registry.keys())
-        return [self.stop(n) for n in names]
+def stop_feeder(name: str) -> str:
+    f = _feeders.pop(name, None)
+    if not f: return f"Feeder '{name}' not found."
+    f.stop(); return f"Feeder '{name}' stopped."
 
-    def status(self) -> dict:
-        with self._lock:
-            return {
-                name: {
-                    "kind": self._meta[name].kind,
-                    "symbols": list(self._meta[name].symbols),
-                    "alive": self._registry[name].thread.is_alive(),
-                }
-                for name in self._registry.keys()
-            }
+def status_feeders() -> dict:
+    return {n: {"symbols": f.symbols, "alive": f.thread.is_alive()} for n, f in _feeders.items()}
 
-# -------------------- App entry --------------------
-def start(app: ApplicationState):
-    writer = DynamicTableWriter({
-        "ts": dht.Instant,
-        "symbol": dht.string,
-        "price": dht.double,
-        "qty": dht.double,
-        "raw": dht.string,
-    })
-    trades = writer.table
-    app["binance_trades"] = trades
-
-    controller = FeederController(writer=writer)
-
-    # Control functions
-    def start_feeder(name: str, symbols: list[str]):
-        return controller.start_binance(name=name, symbols=symbols)
-
-    def stop_feeder(name: str):
-        return controller.stop(name)
-
-    def stop_all_feeders():
-        return controller.stop_all()
-
-    def status_feeders() -> dict:
-        return controller.status()
-
-    def build_status_table():
-        st = status_feeders()
-        rows = [
-            {"name": n, "kind": v["kind"], "symbols": ",".join(v["symbols"]), "alive": v["alive"]}
-            for n, v in st.items()
-        ]
-        app["binance_status"] = dhpd.to_table(pd.DataFrame(rows, columns=["name","kind","symbols","alive"]))
-        return "binance_status"
-
-    # # Expose to Applications panel
-    # app["start_feeder"] = start_feeder
-    # app["stop_feeder"] = stop_feeder
-    # app["stop_all_feeders"] = stop_all_feeders
-    # app["status_feeders"] = status_feeders
-    # app["build_status_table"] = build_status_table
-
-    # Console bindings
-    _bindings = types.ModuleType("deepfeeder_bindings")
-    _bindings.start_feeder = start_feeder
-    _bindings.stop_feeder = stop_feeder
-    _bindings.stop_all_feeders = stop_all_feeders
-    _bindings.status_feeders = status_feeders
-    _bindings.build_status_table = build_status_table
-    _bindings.binance_trades = trades
-    sys.modules["deepfeeder_bindings"] = _bindings
-    print("[deepfeeder] bindings module installed: import deepfeeder_bindings as dfb")
-
-# Script-Application bootstrap
-def initialize(func):
-    app = get_app_state()
-    func(app)
-
-initialize(start)
+# Console bindings: import deepfeeder_bindings as dfb
+_bind = types.ModuleType("deepfeeder_bindings")
+_bind.start_feeder, _bind.stop_feeder, _bind.status_feeders = start_feeder, stop_feeder, status_feeders
+_bind.binance_trades = binance_trades
+sys.modules["deepfeeder_bindings"] = _bind
+print("[deepfeeder] bindings installed: import deepfeeder_bindings as dfb")
