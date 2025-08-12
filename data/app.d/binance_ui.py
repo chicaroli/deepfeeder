@@ -11,22 +11,19 @@ binance_dashboard = ui.dashboard(
             ui.flex(
                 ui.button_group(
                     ui.button("Start BTC",
-                              on_press=lambda: ui.toast(dfb.start_feeder("btc_only", ["btcusdt"])),
+                              on_press=lambda: ui.toast(dfb.start_feeder("binance", "btc_only", ["btcusdt"])),
                               variant="accent"
                               ),
                     ui.button("Stop BTC",
-                              on_press=lambda: ui.toast(dfb.stop_feeder("btc_only")),
+                              on_press=lambda: ui.toast(dfb.stop_feeder("binance", "btc_only")),
                               variant="primary", style="outline"
                               ),
                 ),
-                # ui.action_button("Start BTC", on_press=lambda: ui.toast(dfb.start_feeder("btc_only", ["btcusdt"]))),
-                # ui.action_button("Stop BTC",  on_press=lambda: ui.toast(dfb.stop_feeder("btc_only"))),
-                # direction="row",
+                # later: use a text input to call start_feeder_csv("binance", name, symbols_csv)
             ),
             title="Controls",
         ),
         ui.panel(ui.table(dfb.binance_trades), title="Trades"),
-        ui.panel(ui.table(dfb.status_table), title="Feeders status (live)"),
+        ui.panel(ui.table(dfb.status_table),  title="Feeders status (live)"),
     )
 )
-
