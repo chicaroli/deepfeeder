@@ -1,14 +1,23 @@
 # app.d/core/registry.py
 from __future__ import annotations
-import json, os, tempfile, time
+
+import json
+import os
+import tempfile
+import time
 from threading import Lock
 from typing import Dict, Tuple, List, TypedDict, Optional
 
 from core.base import BaseFeeder
 from core.utils import normalize_symbols
+from core.bus import get_configs_writer
 from providers.binance_feeder import BinanceFeeder
 
+from deephaven.time import to_j_instant
+from datetime import datetime, timezone
+
 DEFAULT_CONFIG_PATH = "/data/app.d/feeders.json"
+
 
 class FeederCfg(TypedDict):
     provider: str
@@ -16,19 +25,51 @@ class FeederCfg(TypedDict):
     symbols: List[str]
     autostart: bool
 
+
 def _key(provider: str, name: str) -> Tuple[str, str]:
     return (provider.lower(), name)
 
+
 class FeederRegistry:
-    """Manages running feeders in-memory and persists feeder configs to JSON."""
+    """
+    Manages running feeders in-memory and persists feeder configs to JSON.
+    Also mirrors configs into a live Deephaven table (via core.bus) for the UI.
+    """
+
     def __init__(self, config_path: str = DEFAULT_CONFIG_PATH):
         self._lock = Lock()
         self._feeders: Dict[Tuple[str, str], BaseFeeder] = {}
         self._configs: Dict[Tuple[str, str], FeederCfg] = {}
         self._config_path = config_path
+
+        # Live configs writer (for UI)
+        self._cfg_writer = get_configs_writer()
+
         self._load_configs()
 
+    # ----------------- helpers: live configs topic -----------------
+
+    def _emit_cfg_row(
+        self,
+        provider: str,
+        name: str,
+        symbols_csv: str,
+        autostart: bool,
+        deleted: bool = False,
+    ) -> None:
+        """Emit a snapshot row of a config into the live configs topic."""
+        now = to_j_instant(datetime.now(timezone.utc))
+        self._cfg_writer.write_row(
+            provider.lower(),
+            name,
+            symbols_csv,
+            bool(autostart),
+            bool(deleted),
+            now,
+        )
+
     # ----------------- persistence -----------------
+
     def _load_configs(self) -> None:
         with self._lock:
             self._configs.clear()
@@ -37,6 +78,7 @@ class FeederRegistry:
                 return
             with open(self._config_path, "r", encoding="utf-8") as f:
                 arr = json.load(f) or []
+
             for item in arr:
                 provider = str(item.get("provider", "")).lower().strip()
                 name = str(item.get("name", "")).strip()
@@ -49,16 +91,25 @@ class FeederRegistry:
                         "symbols": symbols,
                         "autostart": autostart,
                     }
+                    # publish to live configs table
+                    self._emit_cfg_row(provider, name, ",".join(symbols), autostart, deleted=False)
 
     def _save_configs(self) -> None:
         with self._lock:
-            snapshot = [{
-                "provider": p, "name": n,
-                "symbols": cfg["symbols"], "autostart": cfg["autostart"],
-            } for (p, n), cfg in sorted(self._configs.items())]
+            snapshot = [
+                {
+                    "provider": p,
+                    "name": n,
+                    "symbols": cfg["symbols"],
+                    "autostart": cfg["autostart"],
+                }
+                for (p, n), cfg in sorted(self._configs.items())
+            ]
+
         os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix="feeders.", suffix=".json",
-                                   dir=os.path.dirname(self._config_path))
+        fd, tmp = tempfile.mkstemp(
+            prefix="feeders.", suffix=".json", dir=os.path.dirname(self._config_path)
+        )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(snapshot, f, indent=2, ensure_ascii=False)
@@ -71,16 +122,21 @@ class FeederRegistry:
                 pass
 
     # ----------------- factory -----------------
+
     def _make(self, provider: str, name: str, symbols: List[str]) -> BaseFeeder:
         p = provider.lower()
         if p == "binance":
             return BinanceFeeder(name, symbols)
-        # future:
-        # elif p == "tradingview": return TradingViewFeeder(name, symbols)
+        # future providers:
+        # elif p == "tradingview":
+        #     return TradingViewFeeder(name, symbols)
         raise ValueError(f"Unknown provider '{provider}'")
 
     # ----------------- config CRUD -----------------
-    def upsert_config(self, provider: str, name: str, symbols: List[str], autostart: bool = False) -> str:
+
+    def upsert_config(
+        self, provider: str, name: str, symbols: List[str], autostart: bool = False
+    ) -> str:
         provider = provider.lower().strip()
         name = name.strip()
         syms = normalize_symbols(symbols)
@@ -88,6 +144,7 @@ class FeederRegistry:
             return "Provider and name are required."
         if not syms:
             return "Symbols list is empty."
+
         key = _key(provider, name)
         with self._lock:
             self._configs[key] = {
@@ -97,14 +154,22 @@ class FeederRegistry:
                 "autostart": bool(autostart),
             }
             self._save_configs()
+
+        # mirror to live configs table
+        self._emit_cfg_row(provider, name, ",".join(syms), autostart, deleted=False)
         return f"Config '{provider}:{name}' saved."
 
     def remove_config(self, provider: str, name: str) -> str:
+        provider = provider.lower()
         key = _key(provider, name)
         with self._lock:
             existed = self._configs.pop(key, None) is not None
             self._save_configs()
+
         if existed:
+            # mark deleted
+            self._emit_cfg_row(provider, name, "", False, deleted=True)
+            # also stop if running
             self.stop(provider, name)
             return f"Config '{provider}:{name}' removed."
         return f"Config '{provider}:{name}' not found."
@@ -118,8 +183,14 @@ class FeederRegistry:
             return self._configs.get(_key(provider, name))
 
     # ----------------- runtime control -----------------
+
     def start(self, provider: str, name: str, symbols: Optional[List[str]] = None) -> str:
-        key = _key(provider, name)
+        """
+        Start a feeder. If symbols is None or empty, use the saved config.
+        """
+        provider_l = provider.lower()
+        key = _key(provider_l, name)
+
         with self._lock:
             if key in self._feeders:
                 f = self._feeders[key]
@@ -127,23 +198,26 @@ class FeederRegistry:
                     f.emit_status(force=True)
                 except Exception:
                     pass
-                return f"Feeder '{provider}:{name}' already running."
+                return f"Feeder '{provider_l}:{name}' already running."
+
             use_symbols = normalize_symbols(symbols or [])
             if not use_symbols:
                 cfg = self._configs.get(key)
                 if not cfg:
-                    return f"No config for '{provider}:{name}'."
+                    return f"No config for '{provider_l}:{name}'."
                 use_symbols = cfg["symbols"]
-            f = self._make(provider, name, use_symbols)
+
+            f = self._make(provider_l, name, use_symbols)
             self._feeders[key] = f
+
         return f.start()
 
     def stop(self, provider: str, name: str) -> str:
-        key = _key(provider, name)
+        key = _key(provider.lower(), name)
         with self._lock:
             f = self._feeders.pop(key, None)
         if not f:
-            return f"Feeder '{provider}:{name}' not found."
+            return f"Feeder '{key[0]}:{key[1]}' not found."
         return f.stop()
 
     def stop_all(self) -> str:
@@ -151,18 +225,21 @@ class FeederRegistry:
             keys = list(self._feeders.keys())
         stopped = 0
         for p, n in keys:
-            if self.stop(p, n).endswith("stopped"):
+            res = self.stop(p, n)
+            if res.endswith("stopped") or res.endswith("stopped."):
                 stopped += 1
         return f"Stopped {stopped} feeders."
 
     def update_symbols(self, provider: str, name: str, symbols: List[str]) -> str:
         syms = normalize_symbols(symbols)
         self.stop(provider, name)
-        key = _key(provider, name)
+        key = _key(provider.lower(), name)
         with self._lock:
             if key in self._configs:
                 self._configs[key]["symbols"] = syms
                 self._save_configs()
+        # reflect change in live table
+        self._emit_cfg_row(key[0], name, ",".join(syms), self._configs.get(key, {}).get("autostart", False), deleted=False)
         return self.start(provider, name, syms)
 
     def start_all_autostart(self) -> str:
@@ -172,7 +249,7 @@ class FeederRegistry:
         for cfg in items:
             if cfg.get("autostart"):
                 res = self.start(cfg["provider"], cfg["name"])
-                if "started" in res:  # tolerate different phrasing
+                if "started" in res:
                     started += 1
         return f"Started {started} feeders."
 
@@ -193,6 +270,7 @@ class FeederRegistry:
                 "last_error": getattr(f, "last_error", None),
             }
         return out
+
 
 # Singleton
 REGISTRY = FeederRegistry()

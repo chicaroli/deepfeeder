@@ -2,6 +2,24 @@
 from deephaven import DynamicTableWriter
 import deephaven.dtypes as dht
 
+# --- live configs snapshot (for UI) ---
+_CONFIGS_WRITER = DynamicTableWriter({
+    "provider":  dht.string,
+    "name":      dht.string,
+    "symbols":   dht.string,   # CSV string for display
+    "autostart": dht.bool_,
+    "deleted":   dht.bool_,    # model deletions since DTW can't delete rows
+    "updated_at": dht.Instant,
+})
+
+def get_configs_writer():
+    return _CONFIGS_WRITER
+
+def get_configs_table():
+    # latest row per (provider,name), hide deleted
+    return _CONFIGS_WRITER.table.last_by(["provider", "name"]).where("deleted==false")
+
+
 # Trade ticks (provider-agnostic)
 _TRADES_WRITER = DynamicTableWriter({
     "ts": dht.Instant,
