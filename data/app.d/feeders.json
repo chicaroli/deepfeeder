@@ -1,14 +1,20 @@
 [
   {
     "provider": "binance",
-    "name": "btc_only",
+    "name": "btc",
     "symbols": ["btcusdt"],
     "autostart": true
   },
   {
     "provider": "binance",
-    "name": "majors",
+    "name": "eth",
     "symbols": ["ethusdt"],
+    "autostart": true
+  },
+  {
+    "provider": "binance",
+    "name": "others",
+    "symbols": ["btcusdt", "ethusdt", "ltcusdt", "solusdt"],
     "autostart": true
   }
 ]
