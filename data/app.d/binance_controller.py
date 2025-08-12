@@ -4,8 +4,7 @@ from deephaven.appmode import get_app_state
 from deephaven import DynamicTableWriter
 import deephaven.dtypes as dht
 
-import time
-import json, sys, types
+import json, sys, types, time
 from threading import Thread, Event
 from typing import Dict, List
 import websocket, jpy
@@ -23,14 +22,19 @@ class BinanceFeeder:
         self.last_msg_ts = None
         self.last_error = None
         self.started_at = time.time()
+        self._last_emit = 0.0
 
     def start(self):
         # Allow restart
         if self.thread and self.thread.is_alive():
+            self._emit_status(force=True)
             return "already running"
         self.stop_event.clear()
+        self.started_at = time.time()
+        self.last_error = None
         self.thread = Thread(target=self._run, daemon=True, name=f"bf:{self.name}")
         self.thread.start()
+        self._emit_status(force=True)
         return "started"
 
     def stop(self):
@@ -42,6 +46,7 @@ class BinanceFeeder:
             pass
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=3)
+        self._emit_status(force=True)
         return "stopped"
 
     def _on_message(self, _ws, message: str):
@@ -52,6 +57,7 @@ class BinanceFeeder:
             self.writer.write_row(ts, sym, float(d["p"]), float(d["q"]), message)
             self.msg_count += 1
             self.last_msg_ts = ts  # JInstant
+            self._emit_status()
         except Exception as e:
             print(f"[{self.name}] parse/write error: {e}")
 
@@ -75,17 +81,50 @@ class BinanceFeeder:
             finally:
                 self.ws = None
                 if not self.stop_event.is_set():
-                    import random, time
-                    time.sleep(delay + random.uniform(0, 0.5))
+                    import random, time as _t
+                    _t.sleep(delay + random.uniform(0, 0.5))
                     delay = min(delay * 2, 15)
+                self._emit_status(force=True)
+
+    def _emit_status(self, force: bool = False):
+        now = time.time()
+        if not force and (now - self._last_emit) < 1.0:
+            return  # at most once per second
+        self._last_emit = now
+        status_writer.write_row(
+            self.name,
+            self.thread.is_alive(),
+            ",".join(sorted(set(self.symbols))),
+            int(self.msg_count),
+            self.last_msg_ts,  # JInstant or None is OK
+            int(now - self.started_at),
+            self.last_error,
+        )
 
 
 # ---- App wiring ------------------------------------------------------------
 app = get_app_state()
 
+# Trades writer
 writer = DynamicTableWriter({"ts": dht.Instant, "symbol": dht.string,
                              "price": dht.double, "qty": dht.double, "raw": dht.string})
 binance_trades = writer.table
+
+# NEW: Status writer (one row per event; UI will show last_by)
+status_writer = DynamicTableWriter({
+    "feeder": dht.string,
+    "alive": dht.bool_,
+    "symbols": dht.string,
+    "msg_count": dht.long,
+    "last_msg_ts": dht.Instant,
+    "uptime_s": dht.long,
+    "last_error": dht.string,
+})
+
+# the live, deduped view we’ll expose
+from deephaven import agg
+status_table = status_writer.table.last_by("feeder")  # latest row per feeder
+
 
 _feeders: Dict[str, BinanceFeeder] = {}
 
@@ -116,6 +155,9 @@ def status_feeders() -> dict:
 # Console bindings: import deepfeeder_bindings as dfb
 _bind = types.ModuleType("deepfeeder_bindings")
 _bind.start_feeder, _bind.stop_feeder, _bind.status_feeders = start_feeder, stop_feeder, status_feeders
-_bind.binance_trades = binance_trades
+# _bind.binance_trades = binance_trades
+_bind.binance_trades = writer.table
+_bind.status_table = status_table
+_bind.status_events = status_writer.table
 sys.modules["deepfeeder_bindings"] = _bind
 print("[deepfeeder] bindings installed: import deepfeeder_bindings as dfb")
