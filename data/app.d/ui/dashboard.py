@@ -1,7 +1,6 @@
 # app.d/ui/dashboard.py
 from deephaven import ui
 import deepfeeder_bindings as dfb
-from core.bus import get_configs_table
 
 
 @ui.component
@@ -67,21 +66,25 @@ FeederDashboard = ui.dashboard(
     ui.column(
         # Top area (30%)
         ui.row(
-            feeders_toolbar(),
+            ui.stack(
+                feeders_toolbar(),
+                width=30
+            ),
             ui.stack(
                 ui.panel(ui.table(dfb.status_table), title="Feeders status (live)"),
                 ui.panel(ui.table(dfb.configs_live_table), title="Configs (live)"),
                 active_item_index=0,
             ),
-            height=25,
+            height=20,
         ),
-        # Bottom area (70%) – the tabbed stack
         ui.stack(
             ui.panel(ui.table(dfb.trades_table), title="Trades (canonical)"),
             ui.panel(ui.table(dfb.binance_trades_detailed), title="Binance Trades (detailed)"),
             ui.panel(ui.table(dfb.binance_ohlcv_1m), title="Binance OHLCV 1m"),
+            ui.panel(ui.table(dfb.tv_quotes), title="TradingView Quotes (delayed)"),
+            ui.panel(ui.table(dfb.tv_ohlcv_1m),  title="TV OHLCV 1m (derived)"),
             active_item_index=0,
-            height=75,
+            height=80,
         ),
     ),
 )

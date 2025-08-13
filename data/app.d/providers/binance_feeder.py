@@ -5,7 +5,7 @@ import json, websocket, time
 from threading import Thread, Event
 from datetime import datetime, timezone
 
-from deephaven import DynamicTableWriter  # only for typing
+from deephaven import DynamicTableWriter
 from deephaven.time import to_j_instant
 
 from core.base import BaseFeeder

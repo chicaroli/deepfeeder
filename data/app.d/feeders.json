@@ -7,14 +7,14 @@
   },
   {
     "provider": "binance",
-    "name": "eth",
-    "symbols": ["ethusdt"],
+    "name": "crypto",
+    "symbols": ["ethusdt", "ltcusdt", "solusdt", "maticusdt", "avaxusdt"],
     "autostart": false
   },
   {
-    "provider": "binance",
-    "name": "others",
-    "symbols": ["ltcusdt", "solusdt", "maticusdt", "avaxusdt"],
+    "provider": "tradingview",
+    "name": "b3_indexes",
+    "symbols": ["BMFBOVESPA:IND1!", "BMFBOVESPA:DOL1!"],
     "autostart": false
   }
 ]

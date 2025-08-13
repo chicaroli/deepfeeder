@@ -12,6 +12,7 @@ from core.base import BaseFeeder
 from core.utils import normalize_symbols
 from core.bus import get_configs_writer
 from providers.binance_feeder import BinanceFeeder
+from providers.tradingview_feeder import TradingViewFeeder
 
 from deephaven.time import to_j_instant
 from datetime import datetime, timezone
@@ -127,9 +128,10 @@ class FeederRegistry:
         p = provider.lower()
         if p == "binance":
             return BinanceFeeder(name, symbols)
+        elif p == "tradingview":
+            return TradingViewFeeder(name, symbols)
         # future providers:
-        # elif p == "tradingview":
-        #     return TradingViewFeeder(name, symbols)
+        # ...
         raise ValueError(f"Unknown provider '{provider}'")
 
     # ----------------- config CRUD -----------------
