@@ -14,7 +14,10 @@
   {
     "provider": "tradingview",
     "name": "b3_indexes",
-    "symbols": ["BMFBOVESPA:IND1!", "BMFBOVESPA:DOL1!"],
-    "autostart": false
+    "symbols": [
+      "BMFBOVESPA:INDV2025", "BMFBOVESPA:WINV2025",
+      "BMFBOVESPA:DOLU2025", "BMFBOVESPA:WDOV2025"
+    ],
+    "autostart": true
   }
 ]

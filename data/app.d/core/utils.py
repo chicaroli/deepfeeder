@@ -1,5 +1,5 @@
 # app.d/core/utils.py
-from typing import Iterable, List, Union
+from typing import Iterable, List, Union, Tuple, Optional
 
 def normalize_symbols(syms: Union[str, Iterable[str]]) -> List[str]:
     if isinstance(syms, str):
