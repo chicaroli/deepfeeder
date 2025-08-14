@@ -4,9 +4,13 @@ version = "0.1.0"
 description = "DeepFeeder is a real-time market data feeder framework built on Deephaven"
 readme = "README.md"
 requires-python = ">=3.10"
+authors = [
+    {name = "Rodrigo Chicaroli", email = "chicaroli@gmail.com"}
+]
 dependencies = [
-    "pandas>=2.2.2",
-    "pydeephaven>=0.32.0"
+    "pandas>=2.3.1",
+    "pydeephaven>=0.32.0",
+    "pydeephaven-ticking>=0.39.6",
 ]
 
 [tool.uv]

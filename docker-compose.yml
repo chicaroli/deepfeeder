@@ -1,8 +1,6 @@
 services:
   deephaven:
-    build: 
-      context: .
-      dockerfile: Dockerfile.dh
+    build: .
     container_name: deepfeeder-dh
     ports:
       - "10001:10001"   # gRPC
@@ -21,19 +19,19 @@ services:
     networks:
       - eagle_nest
 
-  client:
+  feeder_client:
     build:
-      context: .
-      dockerfile: Dockerfile.client
-    container_name: deepfeeder-client
+      context: ./feeder_client
+      dockerfile: Dockerfile
+    container_name: feeder-client
+    depends_on:
+      - deephaven
     volumes:
-      - .:/workspace
+      - ./feeder_client:/app
+    restart: unless-stopped
     networks:
       - eagle_nest
-    # Optionally expose ports for debugging or Jupyter
-    ports:
-      - "8888:8888"
 
 networks:
   eagle_nest:
-    external: false
+    external: true
