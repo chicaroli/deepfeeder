@@ -17,7 +17,7 @@ from providers.tradingview_feeder import TradingViewFeeder
 from deephaven.time import to_j_instant
 from datetime import datetime, timezone
 
-DEFAULT_CONFIG_PATH = "/data/app.d/feeders.json"
+DEFAULT_CONFIG_PATH = "/data/storage/notebooks/feeders.json"
 
 
 class FeederCfg(TypedDict):
@@ -45,7 +45,6 @@ class FeederRegistry:
 
         # Live configs writer (for UI)
         self._cfg_writer = get_configs_writer()
-
         self._load_configs()
 
     # ----------------- helpers: live configs topic -----------------
@@ -257,6 +256,16 @@ class FeederRegistry:
                 res = self.start(cfg["provider"], cfg["name"])
                 if "started" in res:
                     started += 1
+        return f"Started {started} feeders."
+
+    def start_all(self) -> str:
+        with self._lock:
+            items = list(self._configs.values())
+        started = 0
+        for cfg in items:
+            res = self.start(cfg["provider"], cfg["name"])
+            if "started" in str(res).lower():
+                started += 1
         return f"Started {started} feeders."
 
     def status(self) -> dict:

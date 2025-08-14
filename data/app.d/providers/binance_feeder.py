@@ -9,15 +9,13 @@ from deephaven import DynamicTableWriter
 from deephaven.time import to_j_instant
 
 from core.base import BaseFeeder
-from core.bus import get_trades_writer
 from providers.binance_schema import binance_trades_writer
 
 
 class BinanceFeeder(BaseFeeder):
     def __init__(self, name: str, symbols: List[str]):
         super().__init__("binance", name, symbols)
-        self._detailed_writer = binance_trades_writer()     # provider-specific
-        self._bus_trades_writer = get_trades_writer()       # provider-agnostic
+        self._trades_writer = binance_trades_writer()       # provider-agnostic
         self.stop_event = Event()
         self.ws = None
         self.thread = Thread(target=self._run, daemon=True, name=f"bf:{name}")
@@ -55,27 +53,20 @@ class BinanceFeeder(BaseFeeder):
             d = m.get("data", m)
             ts_event = to_j_instant(datetime.fromtimestamp(int(d.get("E")) / 1000, tz=timezone.utc))
             ts_trade = to_j_instant(datetime.fromtimestamp(int(d.get("T")) / 1000, tz=timezone.utc))
-            symbol = d.get("s").lower()
-            price = float(d.get("p"))
-            qty = float(d.get("q"))
 
-            # 1) provider-specific detailed row
-            self._detailed_writer.write_row(
+            # write to trades table
+            self._trades_writer.write_row(
                 d.get("e"),         # event type
                 ts_event,
                 d.get("s"),         # symbol
                 int(d.get("t")),    # trade id
-                price,
-                qty,
+                float(d.get("p")),  # price
+                float(d.get("q")),  # quantity
                 int(d.get("b", 0)), # buyer order id
                 int(d.get("a", 0)), # seller order id
                 ts_trade,
                 bool(d.get("m"))    # is buyer maker
             )
-
-            # 2) canonical bus row (skinny)
-            # bus trades schema: ts, provider, symbol, price, qty, raw_json
-            self._bus_trades_writer.write_row(ts_trade, self.provider, symbol, price, qty, message)
 
             # health/status
             self.msg_count += 1

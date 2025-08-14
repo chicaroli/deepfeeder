@@ -20,16 +20,6 @@ def get_configs_table():
     return _CONFIGS_WRITER.table.last_by(["provider", "name"]).where("deleted==false")
 
 
-# Trade ticks (provider-agnostic)
-_TRADES_WRITER = DynamicTableWriter({
-    "ts": dht.Instant,
-    "provider": dht.string,
-    "symbol": dht.string,
-    "price": dht.double,
-    "qty": dht.double,
-    "raw": dht.string,
-})
-
 # Feeder status (provider-agnostic)
 _STATUS_WRITER = DynamicTableWriter({
     "provider": dht.string,
@@ -42,14 +32,8 @@ _STATUS_WRITER = DynamicTableWriter({
     "last_error": dht.string,
 })
 
-def get_trades_writer():  # writer only (not a Table)
-    return _TRADES_WRITER
-
 def get_status_writer():
     return _STATUS_WRITER
-
-def get_trades_table():
-    return _TRADES_WRITER.table  # accessed only via bindings
 
 def get_status_table():
     # last row per (provider, feeder)

@@ -2,10 +2,9 @@
 from deephaven import ui
 import deepfeeder_bindings as dfb
 
-
+# --- Toolbar (uses shared selection) ---
 @ui.component
-def feeders_toolbar():
-    # Rebuild picker options when refreshed
+def feeders_control():
     refresh, set_refresh = ui.use_state(0)
     cfgs = ui.use_memo(lambda: dfb.configs_list(), [refresh])
     keys = [f"{c['provider']}:{c['name']}" for c in cfgs]
@@ -27,13 +26,7 @@ def feeders_toolbar():
         if p: ui.toast(dfb.stop_feeder(p, n))
 
     def start_all():
-        # Start *all* configs found (ignores autostart)
-        started = 0
-        for c in cfgs:
-            res = dfb.start_feeder(c["provider"], c["name"], [])
-            if "started" in str(res).lower():
-                started += 1
-        ui.toast(f"Requested start for {len(cfgs)} feeders ({started} reported 'started').")
+        ui.toast(dfb.start_all())
 
     def stop_all():
         ui.toast(dfb.stop_all())
@@ -61,28 +54,33 @@ def feeders_toolbar():
         title="Feeder Controls",
     )
 
-# Top-level dashboard with ONE child (doc rule)
+# --- Dashboard ---
 FeederDashboard = ui.dashboard(
     ui.column(
-        # Top area (30%)
         ui.row(
             ui.stack(
-                feeders_toolbar(),
-                width=30
+                feeders_control(),
+                width=30,
             ),
             ui.stack(
-                ui.panel(ui.table(dfb.status_table), title="Feeders status (live)"),
+                ui.panel(ui.table(
+                    dfb.status_table,
+                    format_=[
+                        ui.TableFormat(cols="alive", if_="alive", background_color="positive", color="white"),
+                        ui.TableFormat(cols="alive", if_="!alive", background_color="negative", color="white"),
+                    ],
+                ), title="Feeders status (live)"),
                 ui.panel(ui.table(dfb.configs_live_table), title="Configs (live)"),
                 active_item_index=0,
             ),
             height=20,
         ),
         ui.stack(
-            ui.panel(ui.table(dfb.trades_table), title="Trades (canonical)"),
-            ui.panel(ui.table(dfb.binance_trades_detailed), title="Binance Trades (detailed)"),
+            ui.panel(ui.table(dfb.binance_trades), title="Binance Trades"),
             ui.panel(ui.table(dfb.binance_ohlcv_1m), title="Binance OHLCV 1m"),
-            ui.panel(ui.table(dfb.tv_quotes), title="TradingView Quotes (delayed)"),
-            ui.panel(ui.table(dfb.tv_ohlcv_1m),  title="TV OHLCV 1m (derived)"),
+            ui.panel(ui.table(dfb.tv_quotes), title="TV Quotes (delayed)"),
+            ui.panel(ui.table(dfb.tv_ohlcv_1m), title="TV OHLCV 1m"),
+            ui.panel(ui.table(dfb.tv_ohlcv_5m), title="TV OHLCV 5m"),
             active_item_index=0,
             height=80,
         ),

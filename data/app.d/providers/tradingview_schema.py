@@ -41,6 +41,25 @@ def tv_ohlcv_1m_from_quotes():
     ).update(["VWAP = Volume == 0 ? null : PriceQty / Volume"])
     return bars
 
+# Optional: 5m OHLCV derived from quotes using VolDelta
+def tv_ohlcv_5m_from_quotes():
+    t = _TV_QUOTES_DTW.table.update([
+        "FiveMinBin = lowerBin(LpTime, 300 * 1_000_000_000L)",
+        "PriceQty = LastPrice * VolDelta"
+    ])
+    bars = t.agg_by(
+        aggs=[
+            agg.first("Open=LastPrice"),
+            agg.max_("High=LastPrice"),
+            agg.min_("Low=LastPrice"),
+            agg.last("Close=LastPrice"),
+            agg.sum_("Volume=VolDelta"),
+            agg.sum_("PriceQty=PriceQty"),
+        ],
+        by=["Exchange", "Ticker", "FiveMinBin"],
+    )
+    return bars
+
 # Optional: synthetic trades (clearly labeled as derived)
 def tv_synthetic_trades_view():
     t = _TV_QUOTES_DTW.table.update([
