@@ -105,6 +105,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "pandas" },
     { name = "pydeephaven" },
+    { name = "pydeephaven-ticking" },
 ]
 
 [package.dev-dependencies]
@@ -118,6 +119,7 @@ dev = [
 requires-dist = [
     { name = "pandas", specifier = ">=2.3.1" },
     { name = "pydeephaven", specifier = ">=0.32.0" },
+    { name = "pydeephaven-ticking", specifier = ">=0.39.6" },
 ]
 
 [package.metadata.requires-dev]
@@ -547,6 +549,19 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/50/ba/52dd2c4bfe4c28f5fdffa4c9532c0610fcec11ff8294d4145e21838c8aab/pydeephaven-0.39.6-py3-none-any.whl", hash = "sha256:225c477672b449bc6065af7cc90b2f058fc8811ebe512019eee9111ca2d57e57", size = 115624, upload-time = "2025-07-30T22:20:13.589Z" },
+]
+
+[[package]]
+name = "pydeephaven-ticking"
+version = "0.39.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydeephaven" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/e2/2896368cd0631188bd23e2679dafba4c1ab7dabbe1b5e0223804d3ae8e9f/pydeephaven_ticking-0.39.6-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9d8bfda28f54624455f4c1bc05c963d17a97421038c5440cb332cb752266d849", size = 13742033, upload-time = "2025-07-30T22:20:23.097Z" },
+    { url = "https://files.pythonhosted.org/packages/00/46/91dcc36cbec0eba1f4daa4d20a20ce1c6f234fa65df37860429720018c09/pydeephaven_ticking-0.39.6-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ced64aec60d82237f008eb681b4bed5f38ecaab369cabce6a3f78cd99e33adb8", size = 13777726, upload-time = "2025-07-30T22:20:26.073Z" },
+    { url = "https://files.pythonhosted.org/packages/b0/2e/d5ca1a24d98a191aabe7712700d89b990ea778e08cf6ca6ea8d081c96e70/pydeephaven_ticking-0.39.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0adb621422874e0ab5740c845a1cb5a05203f41bd56dee0c197b43c363f9778a", size = 13744772, upload-time = "2025-07-30T22:20:28.524Z" },
 ]
 
 [[package]]

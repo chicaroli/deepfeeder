@@ -26,6 +26,8 @@ services:
     container_name: feeder-client
     depends_on:
       - deephaven
+    volumes:
+      - ./feeder_client:/app
     restart: unless-stopped
     networks:
       - eagle_nest
