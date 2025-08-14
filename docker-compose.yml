@@ -19,6 +19,17 @@ services:
     networks:
       - eagle_nest
 
+  feeder_client:
+    build:
+      context: ./feeder_client
+      dockerfile: Dockerfile
+    container_name: feeder-client
+    depends_on:
+      - deephaven
+    restart: unless-stopped
+    networks:
+      - eagle_nest
+
 networks:
   eagle_nest:
     external: true
