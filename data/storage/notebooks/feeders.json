@@ -3,13 +3,13 @@
     "provider": "binance",
     "name": "btc",
     "symbols": ["btcusdt"],
-    "autostart": false
+    "autostart": true
   },
   {
     "provider": "binance",
     "name": "crypto",
     "symbols": ["ethusdt", "ltcusdt", "solusdt", "maticusdt", "avaxusdt"],
-    "autostart": false
+    "autostart": true
   },
   {
     "provider": "tradingview",
