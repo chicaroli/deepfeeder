@@ -1,6 +1,8 @@
 services:
   deephaven:
-    build: .
+    build:
+      context: ./feeder_server
+      dockerfile: Dockerfile
     container_name: deepfeeder-dh
     ports:
       - "10001:10001"   # gRPC
@@ -14,7 +16,7 @@ services:
         -Ddeephaven.application.dir=/data/app.d 
         -Ddeephaven.application.enabled=true
     volumes:
-      - ./data:/data
+      - ./feeder_server/data:/data
     restart: unless-stopped
     networks:
       - eagle_nest
@@ -27,7 +29,9 @@ services:
     depends_on:
       - deephaven
     volumes:
-      - ./feeder_client:/app
+      - ./:/workspace
+#      - ./feeder_client:/app
+
     restart: unless-stopped
     networks:
       - eagle_nest

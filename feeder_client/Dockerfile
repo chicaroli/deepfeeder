@@ -11,9 +11,6 @@ RUN curl -Ls https://astral.sh/uv/install.sh | sh
 # Ensure the installed binary is on the `PATH`
 ENV PATH="/root/.local/bin/:$PATH"
 
-WORKDIR /app
-COPY pyproject.toml ./
-COPY uv.lock ./
-RUN uv sync
+WORKDIR /workspace/feeder_client
 
 CMD ["sleep", "infinity"]

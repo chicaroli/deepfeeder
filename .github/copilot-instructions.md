@@ -14,16 +14,16 @@ The main codebase is in Python, with a focus on Linux compatibility due to depen
 - Use `uv` for dependency management (see `pyproject.toml` and `uv.lock`).
 
 ## Deephaven Server on Docker Image
-- The Deephaven server is available as a Docker image defined in folder data, where it countains all the necessary files to run the server.
+- The Deephaven server is available as a Docker image defined in folder `feeder_server/data`, where it contains all the necessary files to run the server.
 - The server can be started using the provided `docker-compose.yml` file in the root directory.
-- The image is built to make the deephaven server run in app mode, and the code are available `in data/app.p`. It also maps the folder data to the `/data` directory in the container.    
+- The image is built to make the deephaven server run in app mode, and the code is available in `feeder_server/data/app.d`. It also maps the folder `feeder_server/data` to the `/data` directory in the container.    
 - Ensure the server is running before testing the client code.
 
 ## Deephaven Client
 - The client code is located in `feeder_client/src/`.
 - The client interacts with the Deephaven server and should handle data ingestion and processing.
 - Use the Deephaven Python API for all interactions with the server.
-- Some features of the client uses a deephaven-ticking feature, which requires the client to run on Linux.
+- Some features of the client use a deephaven-ticking feature, which requires the client to run on Linux.
 
 ## Libraries and Tools
 
@@ -35,6 +35,7 @@ The main codebase is in Python, with a focus on Linux compatibility due to depen
 
 - All code must run on Linux containers.
 - The client Dockerfile is located in `feeder_client/`.
+- The server Dockerfile and requirements are located in `feeder_server/`.
 - Do not use Windows-specific features or paths.
 - Ensure all dependencies are installed via `uv sync` in the container.
 
@@ -46,12 +47,14 @@ The main codebase is in Python, with a focus on Linux compatibility due to depen
 
 ## File Structure
 
-- `data/`: Deephaven server Docker image and related files.
+- `feeder_server/data/`: Deephaven server Docker image and related files.
+- `feeder_server/Dockerfile`: Server container build instructions.
+- `feeder_server/requirements.txt`: Server dependencies.
 - `feeder_client/src/`: Main client source code.
 - `feeder_client/tests/`: Unit tests.
 - `feeder_client/pyproject.toml`: Project dependencies.
 - `feeder_client/uv.lock`: Locked dependencies.
-- `feeder_client/Dockerfile`: Container build instructions.
+- `feeder_client/Dockerfile`: Client container build instructions.
 
 ## Example Prompts
 
@@ -62,4 +65,3 @@ The main codebase is in Python, with a focus on Linux compatibility due to depen
 ---
 
 This file expects Copilot to follow these instructions when generating code, comments, or documentation for this project.
-

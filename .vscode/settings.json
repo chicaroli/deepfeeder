@@ -1,0 +1,10 @@
+{
+  "python.envFile": "${workspaceFolder}/.env",
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestEnabled": true,
+  "python.defaultInterpreterPath": "${workspaceFolder}/feeder_client/.venv/bin/python",
+  "terminal.integrated.env.linux": {
+    "PYTHONPATH": "feeder_client/src"
+  },
+  "terminal.integrated.cwd": "${workspaceFolder}/feeder_client"
+}

@@ -1,4 +1,6 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 class DeephavenConnector:
     def __init__(self, host: str = None, port: int = None):

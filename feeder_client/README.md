@@ -16,11 +16,13 @@ feeder_client/
 ├── pyproject.toml       # Project metadata and dependencies
 ├── uv.lock              # Locked dependencies for reproducible builds
 ├── src/                 # Source code for the client
-│   ├── dh_client.py     # Deephaven client logic
-│   └── test_ticking.py  # Example/test code for ticking
+│   ├── ticking.py       # Ticking logic for Deephaven integration
+│   └── connectors/
+│       └── deephaven_connector.py  # Deephaven connector implementation
 ├── tests/               # Test suite
 │   ├── __init__.py
-│   └── test_tv_feed.py
+│   └── connectors/
+│       └── test_deephaven_connector.py
 ```
 
 ## Development
@@ -48,22 +50,15 @@ feeder_client/
      ```
 
 ### Running Tests
-```sh
-pytest
-```
 
-### Linting and Type Checking
-```sh
-ruff check src/
-mypy src/
-```
+- Run tests inside the container using:
+  ```sh
+  pytest
+  ```
 
-## Configuration
-- Project dependencies and dev tools are managed in `pyproject.toml`.
-- Deephaven connection and provider configuration are handled in `src/dh_client.py` and related modules.
-
-## Contributing
-Pull requests and issues are welcome! Please ensure code is tested and linted before submitting.
+## Notes
+- The canonical table is not present in this version.
+- All code and features are designed for Linux environments only.
 
 ## License
-This project is licensed under the MIT License.
+See [LICENSE](../LICENSE) for details.

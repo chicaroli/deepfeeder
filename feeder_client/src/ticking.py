@@ -2,7 +2,7 @@
 import os
 import time
 from dotenv import load_dotenv
-from connectors.deephaven_connector import DeepHavenConnector
+from connectors.deephaven_connector import DeephavenConnector
 
 load_dotenv()  # Load environment variables from .env
 
@@ -25,7 +25,7 @@ class MyListener:
             print(f"name={name}, data={data}")
 
 def main():
-    dh_connector = DeepHavenConnector()
+    dh_connector = DeephavenConnector()
     dh_connector.connect()
 
     # Open table and server-filter down to one symbol to minimize bandwidth

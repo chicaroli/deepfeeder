@@ -1,7 +1,6 @@
 import os
 import pytest
-from src.connectors.deephaven_connector import DeephavenConnector
-
+from connectors.deephaven_connector import DeephavenConnector
 
 def test_connector_env(monkeypatch):
     monkeypatch.setenv("DEEPHAVEN_HOST", "testhost")
@@ -41,6 +40,7 @@ def test_context_manager(monkeypatch):
 
 def test_deephaven_session_live():
     connector = DeephavenConnector()
+    print(f"host: {connector.host}, port: {connector.port}")
     connector.establish_session()
     assert connector.session is not None
     # Optionally, check if the session is live by requesting tables list
