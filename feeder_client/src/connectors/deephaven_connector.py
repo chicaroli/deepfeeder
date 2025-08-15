@@ -1,5 +1,7 @@
 import os
 from dotenv import load_dotenv
+from pydeephaven import Session, TableListener, TableUpdate
+
 load_dotenv()
 
 class DeephavenConnector:
@@ -9,7 +11,6 @@ class DeephavenConnector:
         self.session = None
 
     def establish_session(self):
-        from pydeephaven import Session
         self.session = Session(host=self.host, port=self.port)
 
     def open_table(self, table_name: str):
@@ -28,3 +29,33 @@ class DeephavenConnector:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close_session()
+
+class FeedListener(TableListener):
+    def __init__(self, callback=None):
+        """
+        Generic listener for Deephaven table updates.
+        Args:
+            callback (Optional[Callable[[str, dict], None]]): Function called for each delta type and row.
+        """
+        super().__init__()
+        self.callback = callback
+
+    def on_update(self, update: TableUpdate):
+        self._show_deltas("removes", update.removed())
+        self._show_deltas("adds", update.added())
+        self._show_deltas("modified-prev", update.modified_prev())
+        self._show_deltas("modified", update.modified())
+        # Optionally call callback for each added row
+        if self.callback:
+            for _name, data in update.added().items():
+                self.callback("adds", data)
+
+    def on_error(self, error: Exception):
+        print(f"Error happened: {error}")
+
+    def _show_deltas(self, what: str, dict_: dict):
+        if not dict_:
+            return
+        print(f"*** {what} ***")
+        for name, data in dict_.items():
+            print(f"name={name}, data={data}")

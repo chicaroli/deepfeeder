@@ -6,5 +6,8 @@
   "terminal.integrated.env.linux": {
     "PYTHONPATH": "feeder_client/src"
   },
-  "terminal.integrated.cwd": "${workspaceFolder}/feeder_client"
+  "terminal.integrated.cwd": "${workspaceFolder}/feeder_client",
+  "python.testing.pytestArgs": [
+    "feeder_client"
+  ]
 }
