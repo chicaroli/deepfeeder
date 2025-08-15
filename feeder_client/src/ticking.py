@@ -1,10 +1,13 @@
-import pyarrow as pa
+# filepath: /app/src/test_ticking.py
+import os
 import time
-from pydeephaven import Session, TableListener, TableUpdate, listen
+from dotenv import load_dotenv
+from connectors.deephaven_connector import DeepHavenConnector
 
+load_dotenv()  # Load environment variables from .env
 
-class MyListener(TableListener):
-    def on_update(self, update: TableUpdate) -> None:
+class MyListener:
+    def on_update(self, update):
         self._show_deltas("removes", update.removed())
         self._show_deltas("adds", update.added())
         self._show_deltas("modified-prev", update.modified_prev())
@@ -13,7 +16,7 @@ class MyListener(TableListener):
     def on_error(self, error: Exception):
         print(f"Error happened: {error}")
 
-    def _show_deltas(self, what: str, dict: dict[str, pa.Array]):
+    def _show_deltas(self, what: str, dict: dict):
         if len(dict) == 0:
             return
 
@@ -21,20 +24,20 @@ class MyListener(TableListener):
         for name, data in dict.items():
             print(f"name={name}, data={data}")
 
-
 def main():
-    sess = Session(host="deephaven")
+    dh_connector = DeepHavenConnector()
+    dh_connector.connect()
 
     # Open table and server-filter down to one symbol to minimize bandwidth
-    table = sess.open_table("tb_binance_trades").where('Symbol=="BTCUSDT"')
+    table = dh_connector.open_table("tb_binance_ohlcv_1m").where('Symbol=="BTCUSDT"')
 
-    listen_handle = listen(table, MyListener())
+    listen_handle = dh_connector.listen(table, MyListener())
     # Start processing data in another thread
     listen_handle.start()
     time.sleep(15)  # simulate doing other work for 15 seconds
     listen_handle.stop()
 
 if __name__ == "__main__":
-    print(f"Start DH ticking test")
+    print("Start DH ticking test")
     main()
     print("Done")
