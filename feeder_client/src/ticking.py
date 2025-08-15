@@ -3,11 +3,12 @@ import os
 import time
 from dotenv import load_dotenv
 from connectors.deephaven_connector import DeephavenConnector
+from pydeephaven import TableListener, TableUpdate, listen
 
 load_dotenv()  # Load environment variables from .env
 
-class MyListener:
-    def on_update(self, update):
+class MyListener(TableListener):
+    def on_update(self, update: TableUpdate):
         self._show_deltas("removes", update.removed())
         self._show_deltas("adds", update.added())
         self._show_deltas("modified-prev", update.modified_prev())
@@ -25,13 +26,13 @@ class MyListener:
             print(f"name={name}, data={data}")
 
 def main():
-    dh_connector = DeephavenConnector()
-    dh_connector.connect()
+    dh_conn = DeephavenConnector()
+    dh_conn.establish_session()
 
     # Open table and server-filter down to one symbol to minimize bandwidth
-    table = dh_connector.open_table("tb_binance_ohlcv_1m").where('Symbol=="BTCUSDT"')
+    table = dh_conn.session.open_table("tb_binance_ohlcv_1m").where('Symbol=="BTCUSDT"')
 
-    listen_handle = dh_connector.listen(table, MyListener())
+    listen_handle = listen(table, MyListener())
     # Start processing data in another thread
     listen_handle.start()
     time.sleep(15)  # simulate doing other work for 15 seconds
