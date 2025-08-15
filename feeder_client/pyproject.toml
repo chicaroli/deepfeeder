@@ -8,6 +8,7 @@ authors = [
     {name = "Rodrigo Chicaroli", email = "chicaroli@gmail.com"}
 ]
 dependencies = [
+    "dotenv>=0.9.9",
     "pandas>=2.3.1",
     "pydeephaven>=0.32.0",
     "pydeephaven-ticking>=0.39.6",
@@ -37,3 +38,5 @@ python_files = ["test_*.py", "*_test.py", "tests_*.py", "*_tests.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 filterwarnings = ["ignore::DeprecationWarning"]
+
+
