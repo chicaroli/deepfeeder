@@ -11,8 +11,8 @@ _BINANCE_TRADES_DTW = DynamicTableWriter({
     "TradeID": dht.long,
     "Price": dht.double,
     "Quantity": dht.double,
-    "BuyerOrderID": dht.long,
-    "SellerOrderID": dht.long,
+    "BuyerID": dht.long,
+    "SellerID": dht.long,
     "Timestamp": dht.Instant,
     "IsBuyerMaker": dht.bool_,
 })
@@ -28,9 +28,9 @@ def binance_trades_table():
 def binance_ohlcv_1m():
     """1-minute OHLCV derived from detailed trades."""
     t = _BINANCE_TRADES_DTW.table.update([
-        "MinuteBin = lowerBin(Timestamp, 60 * 1_000_000_000L)",
-        "PriceQty = Price * Quantity",
+        "Timestamp = lowerBin(Timestamp, MINUTE)",
         "BuyerMakerCount = IsBuyerMaker ? 1 : 0",
+        "PriceQty = Price * Quantity",
     ])
     ohlc = t.agg_by(
         aggs=[
@@ -39,13 +39,13 @@ def binance_ohlcv_1m():
             agg.min_("Low=Price"),
             agg.last("Close=Price"),
             agg.sum_("Volume=Quantity"),
-            agg.sum_("PriceQty=PriceQty"),
+            agg.count_("Trades"),
             agg.sum_("BuyerMakerCount=BuyerMakerCount"),
-            agg.count_("TotalTrades"),
+            agg.sum_("PriceQty=PriceQty"),
         ],
-        by=["Symbol", "MinuteBin"],
-    ).update([
-        "VWAP = PriceQty / Volume",
-        "BuyerMakerPct = (BuyerMakerCount / TotalTrades) * 100",
-    ])
+        by=["Symbol", "Timestamp"],
+    ).update_view([
+        "BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / MINUTE)",
+        "Vwap = Volume == 0 ? null : PriceQty / Volume",
+    ]).drop_columns(["PriceQty"])
     return ohlc

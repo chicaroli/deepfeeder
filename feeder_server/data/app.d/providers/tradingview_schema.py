@@ -5,7 +5,7 @@ import deephaven.dtypes as dht
 # Provider-specific quotes table (stateful snapshots)
 _TV_QUOTES_DTW = DynamicTableWriter({
     "Exchange":   dht.string,   # "BMFBOVESPA"
-    "Ticker":     dht.string,   # "WIN1!"
+    "Symbol":     dht.string,   # "WIN1!"
     "LpTime":     dht.Instant,  # from lp_time (seconds) or last seen
     "LastPrice":  dht.double,   # lp
     "Bid":        dht.double,
@@ -25,8 +25,8 @@ def tv_quotes_table():
 # Optional: 1m OHLCV derived from quotes using VolDelta
 def tv_ohlcv_1m_from_quotes():
     t = _TV_QUOTES_DTW.table.update([
-        "MinuteBin = lowerBin(LpTime, 60 * 1_000_000_000L)",
-        "PriceQty = LastPrice * VolDelta"
+        "Timestamp = lowerBin(LpTime, MINUTE)",
+        "PriceQty = LastPrice * VolDelta",
     ])
     bars = t.agg_by(
         aggs=[
@@ -37,15 +37,18 @@ def tv_ohlcv_1m_from_quotes():
             agg.sum_("Volume=VolDelta"),
             agg.sum_("PriceQty=PriceQty"),
         ],
-        by=["Exchange", "Ticker", "MinuteBin"],
-    ).update(["VWAP = Volume == 0 ? null : PriceQty / Volume"])
+        by=["Exchange", "Symbol", "Timestamp"],
+    ).update_view([
+        "BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / MINUTE)",
+        "Vwap = Volume == 0 ? null : PriceQty / Volume",
+    ]).drop_columns(["PriceQty"])
     return bars
 
 # Optional: 5m OHLCV derived from quotes using VolDelta
 def tv_ohlcv_5m_from_quotes():
     t = _TV_QUOTES_DTW.table.update([
-        "FiveMinBin = lowerBin(LpTime, 300 * 1_000_000_000L)",
-        "PriceQty = LastPrice * VolDelta"
+        "Timestamp = lowerBin(LpTime, 5 * MINUTE)",
+        "PriceQty = LastPrice * VolDelta",
     ])
     bars = t.agg_by(
         aggs=[
@@ -56,8 +59,11 @@ def tv_ohlcv_5m_from_quotes():
             agg.sum_("Volume=VolDelta"),
             agg.sum_("PriceQty=PriceQty"),
         ],
-        by=["Exchange", "Ticker", "FiveMinBin"],
-    )
+        by=["Exchange", "Symbol", "Timestamp"],
+    ).update_view([
+        "BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / (5 * MINUTE))",
+        "Vwap = Volume == 0 ? null : PriceQty / Volume",
+    ]).drop_columns(["PriceQty"])
     return bars
 
 # Optional: synthetic trades (clearly labeled as derived)
@@ -66,10 +72,10 @@ def tv_synthetic_trades_view():
         'ts = LpTime',
         'provider = "tradingview"',
         'exchange = Exchange',
-        'ticker = Ticker',
+        'symbol = Symbol',
         'price = LastPrice',
         'qty = VolDelta',
         'raw = (String) null',              # not storing raw; keep schema aligned
         'quality = "synthetic_quote"',
     ])
-    return t.view(["ts","provider","exchange","ticker","price","qty","raw","quality"])
+    return t.view(["ts","provider","exchange","symbol","price","qty","raw","quality"])
