@@ -10,8 +10,8 @@ accessors return the existing singletons from `marketfeeder.core`.
 
 from typing import Any
 
-from marketfeeder.core import MARKET_FEEDER, SYM_LISTENER, SCHEMAS
-
+from marketfeeder.core import MARKET_FEEDER, SYM_LISTENER
+from marketfeeder.schemas import SCHEMAS
 
 def get_market_feeder() -> Any:
     """Return the MARKET_FEEDER singleton from marketfeeder.core."""

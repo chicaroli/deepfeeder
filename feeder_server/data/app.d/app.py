@@ -28,7 +28,9 @@ if os.getenv("DEEPFEEDER_AUTOSTART", "1") not in ("0", "false", "False"):
 if os.getenv("DEEPFEEDER_REGISTER_UI", "1") not in ("0", "false", "False"):
     try:
         import ui.dashboard  # import for side-effects: register dashboard
+        FeederDashboard = ui.dashboard.FeederDashboard
         print("[deepfeeder] UI dashboard registered (import ui.dashboard)")
+
     except Exception as _e:
         # Log but do not fail startup if UI is not available in this runtime
         print(f"[deepfeeder] warning: ui.dashboard import failed: {_e}")

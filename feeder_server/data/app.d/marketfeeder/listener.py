@@ -6,6 +6,7 @@ from collections import deque
 import pyarrow as pa
 from deephaven.table_listener import listen, TableListener, TableUpdate
 from typing import Optional
+from datetime import datetime, timezone
 from .schemas import SchemaSpec
 
 class _SymListener(TableListener):
@@ -67,7 +68,7 @@ class _SymListener(TableListener):
                 'provider': self.provider,
                 'schema': self.data_schema,
                 'symbol': self.symbol,
-                'timestamp': pa.Timestamp.now(tz='UTC').isoformat() if hasattr(pa, 'Timestamp') else '',
+                'timestamp': datetime.now(timezone.utc).isoformat(),
             }
         }
         self.buf.append(batch)
