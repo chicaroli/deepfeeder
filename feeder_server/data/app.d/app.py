@@ -1,7 +1,7 @@
 """Deephaven app-mode entrypoint for deepfeeder.
 
 This file imports the explicit binding packages that provide a minimal,
-import-safe API for app-mode. Heavy side-effects (starting feeders) are
+import-safe API for app-mode. Heavy side effects (starting feeders) are
 only performed via explicit function calls.
 """
 
@@ -11,10 +11,10 @@ import os
 # These are intentionally lightweight: they expose functions that construct
 # or return tables lazily and provide explicit control (start/stop etc.).
 import deepfeeder as dfb
-import marketfeeder as mfb
+# import fanout
 
 print("[deepfeeder] deepfeeder package available as import deepfeeder as dfb")
-print("[deepfeeder] marketfeeder package available as import marketfeeder as mfb")
+print("[deepfeeder] fanout package available as import fanout")
 
 # optional: autostart on boot (guarded by env)
 if os.getenv("DEEPFEEDER_AUTOSTART", "1") not in ("0", "false", "False"):
@@ -27,7 +27,7 @@ if os.getenv("DEEPFEEDER_AUTOSTART", "1") not in ("0", "false", "False"):
 # you can disable UI registration in environments without Deephaven UI.
 if os.getenv("DEEPFEEDER_REGISTER_UI", "1") not in ("0", "false", "False"):
     try:
-        import ui.dashboard  # import for side-effects: register dashboard
+        import ui.dashboard  # import for side effects: register dashboard
         FeederDashboard = ui.dashboard.FeederDashboard
         print("[deepfeeder] UI dashboard registered (import ui.dashboard)")
 

@@ -2,7 +2,7 @@
 
 This script is intended to be run inside the Deephaven app/container to
 exercise the listener initialization path. It is deliberately conservative:
-- uses the public `deepfeeder` and `marketfeeder` APIs
+- uses the public `deepfeeder` and `fanout` APIs
 - avoids heavy work at import time
 - starts the listener briefly and then stops it
 

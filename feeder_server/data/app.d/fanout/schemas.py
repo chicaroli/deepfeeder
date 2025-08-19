@@ -5,8 +5,8 @@ Schema registry and provider table imports for MarketFeeder.
 from dataclasses import dataclass
 from typing import Callable, Any, Tuple, Optional, Dict
 
-from providers.binance_schema import binance_trades_table, binance_ohlcv_1m
-from providers.tradingview_schema import tv_quotes_table, tv_ohlcv_1m_from_quotes, tv_ohlcv_5m_from_quotes
+from feeders.binance import binance_trades_table, binance_ohlcv_1m
+from feeders.tradingview import tv_quotes_table, tv_ohlcv_1m_from_quotes, tv_ohlcv_5m_from_quotes
 
 @dataclass(frozen=True)
 class SchemaSpec:
@@ -55,4 +55,3 @@ SCHEMAS: Dict[Tuple[str, str], SchemaSpec] = {
         bin_period_minutes=5,
     ),
 }
-
