@@ -1,61 +1,34 @@
-# app.d/app.py
-import sys, types
-from os import getenv
-from core.registry import REGISTRY
-from core.bus import get_status_table, get_configs_table
-from providers.binance_schema import binance_trades_table, binance_ohlcv_1m
-from providers.tradingview_schema import tv_quotes_table, tv_ohlcv_1m_from_quotes, tv_ohlcv_5m_from_quotes
-from marketfeeder.core import MARKET_FEEDER, SYM_LISTENER, SCHEMAS
+"""Deephaven app-mode entrypoint for deepfeeder.
 
-def configs_list() -> list[dict]:
-    return REGISTRY.list_configs()
+This file imports the explicit binding packages that provide a minimal,
+import-safe API for app-mode. Heavy side-effects (starting feeders) are
+only performed via explicit function calls.
+"""
 
-# existing bindings...
-_bind = types.ModuleType("deepfeeder_bindings")
+import os
 
-# Control
-_bind.start_feeder = lambda provider, name, symbols: REGISTRY.start(provider, name, symbols)
-_bind.stop_feeder = lambda provider, name: REGISTRY.stop(provider, name)
-_bind.stop_all = REGISTRY.stop_all
-_bind.start_all = REGISTRY.start_all
+# Import the public binding packages we provide under app.d/
+# These are intentionally lightweight: they expose functions that construct
+# or return tables lazily and provide explicit control (start/stop etc.).
+import deepfeeder as dfb
+import marketfeeder as mfb
 
-# Config
-_bind.configs_list = configs_list
-_bind.reload_configs = REGISTRY.reload_configs
-
-# Tables
-tb_status_table = get_status_table()
-tb_configs_live_table = get_configs_table()              # LIVE mirror from registry/bus
-## Binance
-tb_binance_trades = binance_trades_table()
-tb_binance_ohlcv_1m = binance_ohlcv_1m()                 # derived candles
-## TradingView
-tb_tv_quotes = tv_quotes_table()
-tb_tv_ohlcv_1m = tv_ohlcv_1m_from_quotes()
-tb_tv_ohlcv_5m = tv_ohlcv_5m_from_quotes()
-
-# _bind assignments remain for internal use
-_bind.status_table = tb_status_table
-_bind.configs_live_table = tb_configs_live_table
-_bind.binance_trades = tb_binance_trades
-_bind.binance_ohlcv_1m = tb_binance_ohlcv_1m
-_bind.tv_quotes = tb_tv_quotes
-_bind.tv_ohlcv_1m = tb_tv_ohlcv_1m
-_bind.tv_ohlcv_5m = tb_tv_ohlcv_5m
-
-
-sys.modules["deepfeeder_bindings"] = _bind
-print("[deepfeeder] bindings installed: import deepfeeder_bindings as dfb")
-
-# Register MarketFeeder Registry
-_mf_bind = types.ModuleType("marketfeeder_bindings")
-_mf_bind.market_feeder = MARKET_FEEDER
-_mf_bind.sym_listener = SYM_LISTENER
-_mf_bind.schemas = SCHEMAS
-sys.modules["marketfeeder_bindings"] = _mf_bind
-print("[deepfeeder] marketfeeder bindings installed: import marketfeeder_bindings as mfb")
+print("[deepfeeder] deepfeeder package available as import deepfeeder as dfb")
+print("[deepfeeder] marketfeeder package available as import marketfeeder as mfb")
 
 # optional: autostart on boot (guarded by env)
-if getenv("DEEPFEEDER_AUTOSTART", "1") not in ("0", "false", "False"):
+if os.getenv("DEEPFEEDER_AUTOSTART", "1") not in ("0", "false", "False"):
     print("[deepfeeder] auto-starting configured feeders...")
-    print(REGISTRY.start_all_autostart())
+    # explicit call into the package; import is safe and lazy
+    print(dfb.start_all_autostart())
+
+# Register UI components (importing the ui.dashboard module registers the
+# dashboard with Deephaven UI). This is guarded by DEEPFEEDER_REGISTER_UI so
+# you can disable UI registration in environments without Deephaven UI.
+if os.getenv("DEEPFEEDER_REGISTER_UI", "1") not in ("0", "false", "False"):
+    try:
+        import ui.dashboard  # import for side-effects: register dashboard
+        print("[deepfeeder] UI dashboard registered (import ui.dashboard)")
+    except Exception as _e:
+        # Log but do not fail startup if UI is not available in this runtime
+        print(f"[deepfeeder] warning: ui.dashboard import failed: {_e}")

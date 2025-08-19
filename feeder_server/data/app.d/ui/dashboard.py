@@ -1,6 +1,6 @@
 # app.d/ui/dashboard.py
 from deephaven import ui
-import deepfeeder_bindings as dfb
+import deepfeeder as dfb
 
 # --- Toolbar (uses shared selection) ---
 @ui.component
