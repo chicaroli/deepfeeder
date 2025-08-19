@@ -156,13 +156,12 @@ class MarketFeeder:
           total_handles: number of active subscription handles
           total_subscriptions: total callbacks registered (same as total_handles)
           total_symbols: distinct symbol keys (same as total_listeners)
-          buffer_total_messages: sum of buffered batches across listeners
+          buffer_total_messages: sum of buffered batches across listeners.
           listeners: list of per-listener dicts (provider/schema/symbol, ref_count, subscriber_count, buffer_len, last_* row counts)
         """
         listeners_info = []
         buffer_total = 0
         for key, lsn in self._lsn.items():
-            snap = {}
             try:
                 snap = lsn.snapshot()
             except Exception:
@@ -188,5 +187,5 @@ class MarketFeeder:
         }
 
 # Expose singleton for App Mode
-MARKET_FEEDER = MarketFeeder()
+market_feeder = MarketFeeder()
 SYM_LISTENER = _SymListener

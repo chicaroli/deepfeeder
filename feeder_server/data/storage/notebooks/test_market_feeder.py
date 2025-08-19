@@ -10,7 +10,7 @@ import deepfeeder as df
 PROVIDER = "binance"
 SCHEMA = "ohlcv_1m"
 SYMBOL = "BTCUSDT"
-MAX_BARS = 3  # set an integer to auto-unsubscribe after that many completed bars
+MAX_BARS = 2  # set an integer to auto-unsubscribe after that many completed bars
 
 _count = 0
 handle = None
