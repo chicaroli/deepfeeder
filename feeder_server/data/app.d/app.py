@@ -11,10 +11,8 @@ import os
 # These are intentionally lightweight: they expose functions that construct
 # or return tables lazily and provide explicit control (start/stop etc.).
 import deepfeeder as dfb
-# import fanout
 
 print("[deepfeeder] deepfeeder package available as import deepfeeder as dfb")
-print("[deepfeeder] fanout package available as import fanout")
 
 # optional: autostart on boot (guarded by env)
 if os.getenv("DEEPFEEDER_AUTOSTART", "1") not in ("0", "false", "False"):

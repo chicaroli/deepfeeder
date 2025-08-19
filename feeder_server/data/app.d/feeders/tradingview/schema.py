@@ -2,6 +2,25 @@
 from deephaven import DynamicTableWriter, agg
 import deephaven.dtypes as dht
 
+# --- Schema metadata (exported) ---
+TV_QUOTES_TIME_COL = "LpTime"
+TV_QUOTES_SYMBOL_COL = "Symbol"
+TV_QUOTES_SCHEMA_COLS = (
+    "LpTime", "Symbol", "LastPrice", "Bid", "Ask", "Volume", "Change", "ChangePct", "VolDelta"
+)
+TV_OHLCV_TIME_COL = "Timestamp"
+TV_OHLCV_SYMBOL_COL = "Symbol"
+TV_OHLCV_1M_SCHEMA_COLS = (
+    "Timestamp", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "Vwap"
+)
+TV_OHLCV_5M_SCHEMA_COLS = TV_OHLCV_1M_SCHEMA_COLS  # identical column layout
+
+__all__ = [
+    'tv_quotes_writer', 'tv_quotes_table', 'tv_ohlcv_1m_from_quotes', 'tv_ohlcv_5m_from_quotes', 'tv_synthetic_trades_view',
+    'TV_QUOTES_TIME_COL', 'TV_QUOTES_SYMBOL_COL', 'TV_QUOTES_SCHEMA_COLS',
+    'TV_OHLCV_TIME_COL', 'TV_OHLCV_SYMBOL_COL', 'TV_OHLCV_1M_SCHEMA_COLS', 'TV_OHLCV_5M_SCHEMA_COLS'
+]
+
 _TV_QUOTES_DTW = DynamicTableWriter({
     'Exchange': dht.string,
     'Symbol': dht.string,
@@ -59,7 +78,7 @@ def tv_ohlcv_5m_from_quotes():
         by=['Exchange', 'Symbol', 'Timestamp'],
     ).update_view([
         'BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / (5 * MINUTE))',
-            'Vwap = Volume == 0 ? null : PriceQty / Volume',
+        'Vwap = Volume == 0 ? null : PriceQty / Volume',
     ]).drop_columns(['PriceQty'])
     return bars
 
@@ -75,4 +94,3 @@ def tv_synthetic_trades_view():
         'quality = "synthetic_quote"',
     ])
     return t.view(['ts','provider','exchange','symbol','price','qty','raw','quality'])
-

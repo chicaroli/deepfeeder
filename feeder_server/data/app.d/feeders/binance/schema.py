@@ -2,6 +2,25 @@
 from deephaven import DynamicTableWriter, agg
 import deephaven.dtypes as dht
 
+# --- Schema metadata (exported) ---
+BINANCE_OHLCV_1M_TIME_COL = "Timestamp"
+BINANCE_OHLCV_1M_SYMBOL_COL = "Symbol"
+BINANCE_OHLCV_1M_SCHEMA_COLS = (
+    "Timestamp", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "Trades", "Vwap",
+    "BuyerMakerCount"
+)
+BINANCE_TRADES_TIME_COL = "Timestamp"
+BINANCE_TRADES_SYMBOL_COL = "Symbol"
+BINANCE_TRADES_SCHEMA_COLS = (
+    "Timestamp", "Symbol", "TradeId", "Price", "Quantity", "BuyerID", "SellerID", "IsBuyerMaker"
+)
+
+__all__ = [
+    'binance_trades_writer', 'binance_trades_table', 'binance_ohlcv_1m',
+    'BINANCE_OHLCV_1M_TIME_COL', 'BINANCE_OHLCV_1M_SYMBOL_COL', 'BINANCE_OHLCV_1M_SCHEMA_COLS',
+    'BINANCE_TRADES_TIME_COL', 'BINANCE_TRADES_SYMBOL_COL', 'BINANCE_TRADES_SCHEMA_COLS'
+]
+
 _BINANCE_TRADES_DTW = DynamicTableWriter({
     'EventType': dht.string,
     'EventTime': dht.Instant,
@@ -44,4 +63,3 @@ def binance_ohlcv_1m():
         'Vwap = Volume == 0 ? null : PriceQty / Volume',
     ]).drop_columns(['PriceQty'])
     return ohlc
-

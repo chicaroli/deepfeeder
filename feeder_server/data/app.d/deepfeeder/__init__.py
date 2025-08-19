@@ -1,15 +1,8 @@
 """Public API for deepfeeder in Deephaven app-mode.
 
-This package exposes a minimal, documented surface that is safe to import in
-Deephaven app-mode. Importing this package does not start feeders or perform
-expensive work — callers must explicitly call control functions such as
-``start_feeder`` or ``start_all_autostart`` to perform lifecycle actions.
-
-The module exports both function-style APIs (recommended) and provides
-backwards-compatible module attribute aliases for existing code that used
-``deepfeeder_bindings`` (for example ``status_table``, ``configs_live_table``,
-``binance_trades``, ...). Attribute access is lazy and will only construct
-heavy tables when requested.
+Backwards-compatible flat function API plus convenient access to top-level
+modules (feeders, ingest, fanout, ui). Avoids circular imports by using
+absolute imports of sibling packages instead of relative re-exports.
 """
 
 from deepfeeder._impl import (
@@ -29,7 +22,14 @@ from deepfeeder._impl import (
     start_all_autostart,
 )
 
+# Absolute imports of sibling top-level packages (no relative import -> no circular)
+import feeders  # provider implementations & schemas
+import ingest   # feeder manager / lifecycle
+import fanout   # fanout layer schemas & listener
+import ui       # UI components
+
 __all__ = [
+    # Flat API
     "get_status_table",
     "get_configs_table",
     "get_binance_trades_table",
@@ -44,9 +44,14 @@ __all__ = [
     "list_configs",
     "reload_configs",
     "start_all_autostart",
+    # Namespaces
+    "feeders",
+    "ingest",
+    "fanout",
+    "ui",
 ]
 
-# Backwards-compatible function alias for older code that used configs_list
+# Backwards-compatible function alias
 def configs_list(*args, **kwargs):
     """Compatibility wrapper for `list_configs()` exposing the older name used
     in UI code.
