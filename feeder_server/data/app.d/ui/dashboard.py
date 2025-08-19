@@ -2,11 +2,14 @@
 from deephaven import ui
 import deepfeeder as dfb
 
+# Use direct manager reference for lifecycle controls
+_feeder_mgr = dfb.feeder_manager
+
 # --- Toolbar (uses shared selection) ---
 @ui.component
 def feeders_control():
     refresh, set_refresh = ui.use_state(0)
-    cfgs = ui.use_memo(lambda: dfb.configs_list(), [refresh])
+    cfgs = ui.use_memo(lambda: _feeder_mgr.list_configs(), [refresh])
     keys = [f"{c['provider']}:{c['name']}" for c in cfgs]
     selected_key, set_selected_key = ui.use_state(keys[0] if keys else "")
 
@@ -19,20 +22,20 @@ def feeders_control():
 
     def start_selected():
         p, n = _ensure_selected()
-        if p: ui.toast(dfb.start_feeder(p, n, []))
+        if p: ui.toast(_feeder_mgr.start(p, n, []))
 
     def stop_selected():
         p, n = _ensure_selected()
-        if p: ui.toast(dfb.stop_feeder(p, n))
+        if p: ui.toast(_feeder_mgr.stop(p, n))
 
     def start_all():
-        ui.toast(dfb.start_all())
+        ui.toast(_feeder_mgr.start_all())
 
     def stop_all():
-        ui.toast(dfb.stop_all())
+        ui.toast(_feeder_mgr.stop_all())
 
     def reload_from_disk():
-        ui.toast(dfb.reload_configs())
+        ui.toast(_feeder_mgr.reload_configs())
         set_refresh(refresh + 1)
 
     return ui.panel(
