@@ -16,7 +16,8 @@ class MarketFeeder:
         self._subs: Dict[str, Set[Callable[[dict], None]]] = {}
         self._handles: Dict[str, Tuple[str, Callable[[dict], None], Optional[Iterable[str]]]] = {}
 
-    def _key(self, provider: str, schema: str, symbol: str) -> str:
+    @staticmethod
+    def _key(provider: str, schema: str, symbol: str) -> str:
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per subscription is allowed. 'symbol' must be a string.")
         return f"{provider}|{schema}|{symbol}"
@@ -30,9 +31,16 @@ class MarketFeeder:
             raise ValueError(f"Unknown provider/schema: {provider}/{data_schema}")
         base = spec.table_fn()
         sym_expr = _symbol_filter_expr(spec, symbol)
-        view = (base.where(sym_expr)
-                    .last_by([spec.symbol_col]) if spec.bin_period_minutes else base.where(sym_expr))
-        view = view.view(*spec.cols)
+        # IMPORTANT: For bar (binned) schemas we must retain full history so that new bars arrive as ADDS;
+        # using last_by() here collapsed history to a single rolling row, causing only MODIFIED events and
+        # preventing completion detection.
+        if spec.bin_period_minutes:
+            view = base.where(sym_expr)
+        else:
+            # Non-bar (e.g., trades, quotes) can optionally keep all rows; leaving logic as-is (no last_by)
+            # If a future optimization is needed, last_by could be reintroduced behind a flag.
+            view = base.where(sym_expr)
+        view = view.view([*spec.cols])
         def emit_completed(msg: dict):
             for h, (k, cb, fields, only_completed) in list(self._handles.items()):
                 if k != key:
@@ -97,7 +105,7 @@ class MarketFeeder:
             c for c in spec.cols if (c.lower() in {f.lower() for f in fields} or c in (spec.time_col, spec.symbol_col))
         )
         t = (base.where(_today_expr(spec, sym_expr))
-                 .view(*cols)
+                 .view(list(cols))
                  .sort([spec.time_col]))
         df = t.to_pandas()
         try:
@@ -139,6 +147,45 @@ class MarketFeeder:
         if len(snap) >= 2 and "timestamp" in snap.columns:
             wm = snap.iloc[-2]["timestamp"]
         return handle, snap, wm
+
+    def stats(self) -> dict:
+        """Return a snapshot of internal state for diagnostics / monitoring.
+
+        Contents:
+          total_listeners: number of active symbol listeners
+          total_handles: number of active subscription handles
+          total_subscriptions: total callbacks registered (same as total_handles)
+          total_symbols: distinct symbol keys (same as total_listeners)
+          buffer_total_messages: sum of buffered batches across listeners
+          listeners: list of per-listener dicts (provider/schema/symbol, ref_count, subscriber_count, buffer_len, last_* row counts)
+        """
+        listeners_info = []
+        buffer_total = 0
+        for key, lsn in self._lsn.items():
+            snap = {}
+            try:
+                snap = lsn.snapshot()
+            except Exception:
+                snap = {'provider': lsn.provider, 'schema': lsn.data_schema, 'symbol': lsn.symbol, 'error': 'snapshot-failed'}
+            ref_count = self._refs.get(key, 0)
+            subs = self._subs.get(key, set())
+            subscriber_count = len(subs) if subs else 0
+            buffer_len = snap.get('buffer_len', 0)
+            buffer_total += buffer_len
+            snap.update({
+                'key': key,
+                'ref_count': ref_count,
+                'subscriber_count': subscriber_count,
+            })
+            listeners_info.append(snap)
+        return {
+            'total_listeners': len(self._lsn),
+            'total_handles': len(self._handles),
+            'total_subscriptions': len(self._handles),
+            'total_symbols': len(self._lsn),
+            'buffer_total_messages': buffer_total,
+            'listeners': listeners_info,
+        }
 
 # Expose singleton for App Mode
 MARKET_FEEDER = MarketFeeder()

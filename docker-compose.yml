@@ -30,12 +30,10 @@ services:
       - deephaven
     volumes:
       - ./:/workspace
-#      - ./feeder_client:/app
-
     restart: unless-stopped
     networks:
       - eagle_nest
 
 networks:
   eagle_nest:
-    external: false
+    external: true

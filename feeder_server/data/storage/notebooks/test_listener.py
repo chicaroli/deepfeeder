@@ -1,21 +1,22 @@
-import marketfeeder as mfb
+import deepfeeder as mfb
 
-# Dummy callback to print batches
+# Callback: print only completed bars as a DataFrame
 def print_batch(batch):
-    meta = batch.get('meta', {})
-    timestamp = meta.get('timestamp', '')
-    added = batch.get('added')
-    updated = batch.get('updated')
     completed = batch.get('completed')
-    print(f"meta {meta} | {timestamp} | adds: {added.num_rows if added else 0} | updates: {updated.num_rows if updated else 0} | completes: {completed.num_rows if completed else 0}")
-
+    if not completed or completed.num_rows == 0:
+        return
+    df = completed.to_pandas()
+    print("COMPLETED BARS:\n", df)
 
 # Choose provider/schema/symbol for test
 provider = "binance"
 data_schema = "ohlcv_1m"
 symbol = "BTCUSDT"
-spec = mfb.get_schemas()[(provider, data_schema)]
-view = spec.table_fn().where(f"{spec.symbol_col}=='{symbol}'").view(list(spec.cols))
-SymListener = mfb.get_sym_listener()
-listener = SymListener(provider, data_schema, symbol, spec, view, print_batch)
-listener.stop()
+cols = ['Timestamp', 'Symbol', 'BarId', 'Open', 'High', 'Low', 'Close', 'Volume']
+spec = mfb.fanout.get_schemas()[(provider, data_schema)]
+view = spec.table_fn().where(f"{spec.symbol_col}=='{symbol}'").view(cols)
+SymListener = mfb.fanout.get_sym_listener()
+listener = SymListener(provider, data_schema, symbol, spec, view, print_batch, debug=False)
+
+# listener.stop()  # keep running to observe completed bars; stop manually when done
+
