@@ -3,6 +3,7 @@
 Backwards-compatible flat function API plus convenient access to top-level
 modules (feeders, ingest, fanout, ui). Avoids circular imports by using
 absolute imports of sibling packages instead of relative re-exports.
+Lifecycle wrappers were removed; aliases now directly reference feeder_manager methods.
 """
 
 from deepfeeder._impl import (
@@ -13,23 +14,27 @@ from deepfeeder._impl import (
     get_tv_quotes_table,
     get_tv_ohlcv_1m_table,
     get_tv_ohlcv_5m_table,
-    start_feeder,
-    stop_feeder,
-    stop_all,
-    start_all,
-    list_configs,
-    reload_configs,
-    start_all_autostart,
 )
+from ingest.manager import feeder_manager
 
-# Absolute imports of sibling top-level packages (no relative import -> no circular)
-import feeders  # provider implementations & schemas
-import ingest   # feeder manager / lifecycle
-import fanout   # fanout layer schemas & listener
-import ui       # UI components
+# Absolute imports of sibling top-level packages
+import feeders
+import ingest
+import fanout
+import ui
+
+# Direct aliases (backward compatibility)
+start_feeder = feeder_manager.start
+stop_feeder = feeder_manager.stop
+describe_feeders = feeder_manager.status  # optional utility (not in __all__ unless desired)
+stop_all = feeder_manager.stop_all
+start_all = feeder_manager.start_all
+list_configs = feeder_manager.list_configs
+reload_configs = feeder_manager.reload_configs
+start_all_autostart = feeder_manager.start_all_autostart
 
 __all__ = [
-    # Flat API
+    # Flat API (tables)
     "get_status_table",
     "get_configs_table",
     "get_binance_trades_table",
@@ -37,6 +42,7 @@ __all__ = [
     "get_tv_quotes_table",
     "get_tv_ohlcv_1m_table",
     "get_tv_ohlcv_5m_table",
+    # Lifecycle (aliases)
     "start_feeder",
     "stop_feeder",
     "stop_all",
@@ -49,6 +55,8 @@ __all__ = [
     "ingest",
     "fanout",
     "ui",
+    # Manager (optional explicit export)
+    "feeder_manager",
 ]
 
 # Backwards-compatible function alias
