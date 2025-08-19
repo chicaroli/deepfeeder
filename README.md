@@ -11,7 +11,6 @@ The system is designed for **low-latency streaming**, **live analytics**, and **
 
 - **Modular feeder architecture** via `BaseFeeder` for adding new data providers.
 - **Binance real-time trades** WebSocket ingestion.
-- **Canonical trades bus** for provider-agnostic downstream processing.
 - **Provider-specific schemas** (Binance detailed trades, aggregated OHLCV).
 - **Live Deephaven tables** for trades, OHLCV, and feeder status.
 - **Persistent feeder configs** stored in JSON, mirrored to live tables.
@@ -22,7 +21,7 @@ The system is designed for **low-latency streaming**, **live analytics**, and **
 
 ## Requirements
 
-From [`requirements.txt`](requirements.txt):
+From [`feeder_server/requirements.txt`](feeder_server/requirements.txt):
 
 ```
 websocket-client>=1.8.0
@@ -38,122 +37,64 @@ You will also need **Deephaven Server** (Docker recommended).
 ## Project Structure
 
 ```
-app.d/
-  app.py                     # Deephaven application bindings
-  core/
-    base.py                  # BaseFeeder abstract class
-    bus.py                   # DynamicTableWriters for configs, trades, status
-    registry.py              # FeederRegistry for config persistence & runtime control
-    utils.py                 # Utility functions (symbol normalization)
-  providers/
-    binance_schema.py        # Detailed Binance trades schema + OHLCV aggregation
-    binance_feeder.py        # Binance WebSocket feeder implementation
-  ui/
-    dashboard.py              # Deephaven UI components for managing feeders
-feeders.json                 # Persistent configs (autostart, symbols, etc.)
+feeder_server/
+  Dockerfile                   # Server container setup
+  requirements.txt             # Server dependencies
+  data/
+    app.d/
+      app.py                     # Deephaven application bindings
+      core/
+        base.py                  # BaseFeeder abstract class
+        bus.py                   # DynamicTableWriters for configs, trades, status
+        registry.py              # FeederRegistry for config persistence & runtime control
+        utils.py                 # Utility functions (symbol normalization)
+      providers/
+        binance_schema.py        # Detailed Binance trades schema + OHLCV aggregation
+        binance_feeder.py        # Binance WebSocket feeder implementation
+      ui/
+        dashboard.py             # Deephaven UI components for managing feeders
+    storage/
+      layouts/
+      notebooks/
+        feeders.json             # Persistent configs (autostart, symbols, etc.)
+feeder_client/
+  Dockerfile                   # Client container setup
+  pyproject.toml               # Client dependencies
+  uv.lock                      # Locked dependencies
+  src/                         # Client source code
+    ticking.py                 # Ticking logic for Deephaven integration
+    connectors/
+      deephaven_connector.py   # Deephaven connector implementation
+  tests/                       # Client test suite
+    connectors/
+      test_deephaven_connector.py
 requirements.txt
+LICENSE
 docker-compose.yml
+README.md
 ```
 
 ---
 
 ## Quick Start
 
-1. **Create a minimal config file** at `/data/app.d/feeders.json`:
+### Deephaven Server
 
-   ```json
-   [
-     {
-       "provider": "binance",
-       "name": "btc_only",
-       "symbols": ["btcusdt"],
-       "autostart": true
-     }
-   ]
-   ```
+Start the Deephaven server using Docker Compose:
 
-2. **Start Deephaven with DeepFeeder**:
-
-   ```bash
-   docker compose up -d
-   ```
-
-3. **Open the dashboard** in your browser:  
-   [http://localhost:10000](http://localhost:10000) → **Feeder Dashboard**.
-
-4. You should now see **live BTC/USDT trades** updating in:
-   - **Trades (canonical)**  
-   - **Binance Trades (detailed)**  
-   - **Binance OHLCV 1m**
-
----
-
-## How It Works
-
-1. **Feeder Lifecycle**
-   - Feeders are instantiated via the `FeederRegistry`.
-   - Each feeder runs a background thread connecting to the provider's WebSocket API.
-   - Incoming messages are parsed, validated, and written into **DynamicTableWriter** streams.
-
-2. **Data Flow**
-   - **Provider-specific table**: Rich schema (e.g., Binance trade details).
-   - **Canonical trades bus**: Uniform schema for cross-provider processing.
-   - **Aggregated OHLCV**: Derived inside Deephaven from detailed trades.
-
-3. **UI & Control**
-   - The dashboard (`dashboard.py`) lets you:
-     - View live trades and OHLCV.
-     - Start/stop feeders.
-     - Manage configs (create, update, delete).
-     - Trigger autostart feeders.
-
-4. **Persistence**
-   - Configs are stored in `/data/app.d/feeders.json`.
-   - Live configs table mirrors file state for real-time visibility.
-
----
-
-## Adding a New Provider
-
-1. Create a new feeder class in `providers/` inheriting from `BaseFeeder`.
-2. Implement:
-   - `start()` — to open connections and begin streaming.
-   - `stop()` — to cleanly close connections.
-   - `is_alive()` — to report health.
-3. Register it in `FeederRegistry._make()`.
-
----
-
-## Example `feeders.json`
-
-```json
-[
-  {
-    "provider": "binance",
-    "name": "btc_only",
-    "symbols": ["btcusdt"],
-    "autostart": true
-  },
-  {
-    "provider": "binance",
-    "name": "eth_only",
-    "symbols": ["ethusdt"],
-    "autostart": false
-  }
-]
+```sh
+docker compose up --build
 ```
 
----
+### Feeder Client
 
-## Roadmap
+The feeder client is located in the `feeder_client/` directory. It provides code for connecting to market data sources and interacting with Deephaven tables, including support for ticking features.
 
-- Additional providers (TradingView, Databento, B3).
-- Enhanced fault tolerance & reconnection logic.
-- Historical data sync & persistence to TimescaleDB.
-- Subscription filtering to reduce bandwidth for multi-symbol tables.
+> **Note:** The feeder client must run on Linux due to Deephaven Ticking dependencies. Running on Windows or macOS is not supported for this feature.
+
+See [`feeder_client/README.md`](feeder_client/README.md) for client-specific instructions.
 
 ---
 
 ## License
-
-This project is proprietary unless otherwise specified.
+See [LICENSE](LICENSE) for details.

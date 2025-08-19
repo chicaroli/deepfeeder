@@ -1,0 +1,2 @@
+# This requirements file is for the DeepHaven Python client, installed inside a Docker container.
+websocket-client>=1.8.0
