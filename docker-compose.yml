@@ -38,4 +38,4 @@ services:
 
 networks:
   eagle_nest:
-    external: true
+    external: false

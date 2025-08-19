@@ -6,29 +6,50 @@ only performed via explicit function calls.
 """
 
 import os
-
-# Import the public binding packages we provide under app.d/
-# These are intentionally lightweight: they expose functions that construct
-# or return tables lazily and provide explicit control (start/stop etc.).
+from datetime import datetime, timezone
 import deepfeeder as dfb
 
-print("[deepfeeder] deepfeeder package available as import deepfeeder as dfb")
+# --- logging helpers -------------------------------------------------------
 
-# optional: autostart on boot (guarded by env)
-if os.getenv("DEEPFEEDER_AUTOSTART", "1") not in ("0", "false", "False"):
-    print("[deepfeeder] auto-starting configured feeders...")
-    # explicit call into the package; import is safe and lazy
-    print(dfb.start_all_autostart())
+def _ts() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-# Register UI components (importing the ui.dashboard module registers the
-# dashboard with Deephaven UI). This is guarded by DEEPFEEDER_REGISTER_UI so
-# you can disable UI registration in environments without Deephaven UI.
-if os.getenv("DEEPFEEDER_REGISTER_UI", "1") not in ("0", "false", "False"):
+def _log(msg: str) -> None:
+    print(f"[deepfeeder {_ts()}] {msg}")
+
+# --- startup environment summary -------------------------------------------
+
+autostart_env = os.getenv("DEEPFEEDER_AUTOSTART", "1")
+register_ui_env = os.getenv("DEEPFEEDER_REGISTER_UI", "1")
+
+_log("package imported: use 'import deepfeeder as dfb'")
+_log(f"env DEEPFEEDER_AUTOSTART={autostart_env!r} DEEPFEEDER_REGISTER_UI={register_ui_env!r}")
+
+# --- optional autostart ----------------------------------------------------
+
+if autostart_env not in ("0", "false", "False"):
     try:
-        import ui.dashboard  # import for side effects: register dashboard
-        FeederDashboard = ui.dashboard.FeederDashboard
-        print("[deepfeeder] UI dashboard registered (import ui.dashboard)")
+        _log("autostart enabled: starting configured feeders...")
+        result = dfb.feeder_manager.start_all_autostart()
+        # Provide concise summary if possible
+        if isinstance(result, dict):
+            started = result.get("started") or result.get("success") or result
+            _log(f"autostart result: {started}")
+        else:
+            _log(f"autostart result: {result}")
+    except Exception as exc:  # noqa: BLE001 broad so app still loads
+        _log(f"autostart failed: {exc!r}")
+else:
+    _log("autostart disabled by environment")
 
-    except Exception as _e:
-        # Log but do not fail startup if UI is not available in this runtime
-        print(f"[deepfeeder] warning: ui.dashboard import failed: {_e}")
+# --- optional UI registration ----------------------------------------------
+
+if register_ui_env not in ("0", "false", "False"):
+    try:
+        import ui.dashboard  # type: ignore  # side-effect import: registers dashboard
+        FeederDashboard = ui.dashboard.FeederDashboard  # noqa: N816 (framework style)
+        _log("UI dashboard registered (ui.dashboard.FeederDashboard)")
+    except Exception as exc:  # noqa: BLE001
+        _log(f"UI dashboard registration skipped (error): {exc!r}")
+else:
+    _log("UI dashboard registration disabled by environment")

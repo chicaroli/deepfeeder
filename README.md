@@ -7,6 +7,27 @@ The system is designed for **low-latency streaming**, **live analytics**, and **
 
 ---
 
+## Recent API Simplification
+
+The public Python API was simplified. Lifecycle alias functions (`start_feeder`, `stop_feeder`, etc.) and lazy attribute table accessors were removed. Use the singleton `feeder_manager` and explicit table getters instead:
+
+```python
+import deepfeeder as df
+
+# Lifecycle
+res = df.feeder_manager.start("binance", "default", ["btcusdt"])  # start
+status = df.feeder_manager.status()                                   # dict snapshot
+
+# Tables (Deephaven objects)
+status_t = df.get_status_table()
+configs_t = df.get_configs_table()
+trades_t = df.get_binance_trades_table()
+```
+
+Old names like `deepfeeder.status_table` / `deepfeeder.configs_live_table` are no longer exported.
+
+---
+
 ## Features
 
 - **Modular feeder architecture** via `BaseFeeder` for adding new data providers.
@@ -14,7 +35,7 @@ The system is designed for **low-latency streaming**, **live analytics**, and **
 - **Provider-specific schemas** (Binance detailed trades, aggregated OHLCV).
 - **Live Deephaven tables** for trades, OHLCV, and feeder status.
 - **Persistent feeder configs** stored in JSON, mirrored to live tables.
-- **UI Dashboard** for starting, stopping, and managing feeders in real time.
+- **UI Dashboard** for managing feeders in real time.
 - **Autostart mode** for predefined configs on server boot.
 
 ---
@@ -23,7 +44,7 @@ The system is designed for **low-latency streaming**, **live analytics**, and **
 
 From [`feeder_server/requirements.txt`](feeder_server/requirements.txt):
 
-```
+```text
 websocket-client>=1.8.0
 pandas>=2.2.2
 pyarrow>=16.1.0
@@ -36,13 +57,13 @@ You will also need **Deephaven Server** (Docker recommended).
 
 ## Project Structure
 
-```
+```text
 feeder_server/
-  Dockerfile                   # Server container setup
-  requirements.txt             # Server dependencies
+  Dockerfile
+  requirements.txt
   data/
     app.d/
-      app.py                     # Deephaven application bindings
+      app.py
       core/
         base.py                  # BaseFeeder abstract class
         bus.py                   # DynamicTableWriters for configs, trades, status
@@ -54,18 +75,17 @@ feeder_server/
       ui/
         dashboard.py             # Deephaven UI components for managing feeders
     storage/
-      layouts/
       notebooks/
         feeders.json             # Persistent configs (autostart, symbols, etc.)
 feeder_client/
-  Dockerfile                   # Client container setup
-  pyproject.toml               # Client dependencies
-  uv.lock                      # Locked dependencies
-  src/                         # Client source code
+  Dockerfile
+  pyproject.toml
+  uv.lock
+  src/
     ticking.py                 # Ticking logic for Deephaven integration
     connectors/
       deephaven_connector.py   # Deephaven connector implementation
-  tests/                       # Client test suite
+  tests/
     connectors/
       test_deephaven_connector.py
 requirements.txt
@@ -82,7 +102,7 @@ README.md
 
 Start the Deephaven server using Docker Compose:
 
-```sh
+```bash
 docker compose up --build
 ```
 
@@ -90,11 +110,12 @@ docker compose up --build
 
 The feeder client is located in the `feeder_client/` directory. It provides code for connecting to market data sources and interacting with Deephaven tables, including support for ticking features.
 
-> **Note:** The feeder client must run on Linux due to Deephaven Ticking dependencies. Running on Windows or macOS is not supported for this feature.
+> **Note:** The feeder client must run on Linux due to Deephaven ticking requirements.
 
 See [`feeder_client/README.md`](feeder_client/README.md) for client-specific instructions.
 
 ---
 
 ## License
+
 See [LICENSE](LICENSE) for details.

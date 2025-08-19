@@ -1,17 +1,45 @@
-# app.d/ui/dashboard.py
+"""Dashboard UI components for managing DeepFeeder lifecycle & viewing tables.
+
+Exposes FeederDashboard (a Deephaven UI dashboard) and an internal
+feeder_controls component (toolbar for lifecycle actions).
+"""
+
+from typing import List
 from deephaven import ui
 import deepfeeder as dfb
 
-# Use direct manager reference for lifecycle controls
-_feeder_mgr = dfb.feeder_manager
+# Reusable formatting helpers
+
+def _status_table_formats():
+    """Return table format rules for feeder status table."""
+    return [
+        ui.TableFormat(cols="alive", if_="alive", background_color="positive", color="white"),
+        ui.TableFormat(cols="alive", if_="!alive", background_color="negative", color="white"),
+    ]
+
+
+def _status_panel():
+    """Panel containing the live feeders status table."""
+    return ui.panel(
+        ui.table(dfb.get_status_table(), format_=_status_table_formats()),
+        title="Feeders status (live)",
+    )
 
 # --- Toolbar (uses shared selection) ---
 @ui.component
-def feeders_control():
+def feeder_controls():
+    """Toolbar providing lifecycle controls for configured feeders."""
     refresh, set_refresh = ui.use_state(0)
-    cfgs = ui.use_memo(lambda: _feeder_mgr.list_configs(), [refresh])
-    keys = [f"{c['provider']}:{c['name']}" for c in cfgs]
+    cfgs: List[dict] = ui.use_memo(lambda: dfb.feeder_manager.list_configs(), [refresh])  # type: ignore[assignment]
+    keys: List[str] = [f"{c['provider']}:{c['name']}" for c in cfgs]
     selected_key, set_selected_key = ui.use_state(keys[0] if keys else "")
+
+    # Ensure selected key stays valid after refresh
+    def _sync_selection():
+        nonlocal selected_key
+        if selected_key and selected_key not in keys:
+            set_selected_key(keys[0] if keys else "")
+    _sync_selection()
 
     def _ensure_selected():
         if not selected_key:
@@ -21,21 +49,31 @@ def feeders_control():
         return p, n
 
     def start_selected():
+        if not keys:
+            return
         p, n = _ensure_selected()
-        if p: ui.toast(_feeder_mgr.start(p, n, []))
+        if p:
+            ui.toast(dfb.feeder_manager.start(p, n, []))
 
     def stop_selected():
+        if not keys:
+            return
         p, n = _ensure_selected()
-        if p: ui.toast(_feeder_mgr.stop(p, n))
+        if p:
+            ui.toast(dfb.feeder_manager.stop(p, n))
 
     def start_all():
-        ui.toast(_feeder_mgr.start_all())
+        if not keys:
+            return
+        ui.toast(dfb.feeder_manager.start_all())
 
     def stop_all():
-        ui.toast(_feeder_mgr.stop_all())
+        if not keys:
+            return
+        ui.toast(dfb.feeder_manager.stop_all())
 
     def reload_from_disk():
-        ui.toast(_feeder_mgr.reload_configs())
+        ui.toast(dfb.feeder_manager.reload_configs())
         set_refresh(refresh + 1)
 
     return ui.panel(
@@ -62,28 +100,22 @@ FeederDashboard = ui.dashboard(
     ui.column(
         ui.row(
             ui.stack(
-                feeders_control(),
+                feeder_controls(),
                 width=30,
             ),
             ui.stack(
-                ui.panel(ui.table(
-                    dfb.status_table,
-                    format_=[
-                        ui.TableFormat(cols="alive", if_="alive", background_color="positive", color="white"),
-                        ui.TableFormat(cols="alive", if_="!alive", background_color="negative", color="white"),
-                    ],
-                ), title="Feeders status (live)"),
-                ui.panel(ui.table(dfb.configs_live_table), title="Configs (live)"),
+                _status_panel(),
+                ui.panel(ui.table(dfb.get_configs_table()), title="Configs (live)"),
                 active_item_index=0,
             ),
             height=20,
         ),
         ui.stack(
-            ui.panel(ui.table(dfb.binance_trades), title="Binance Trades"),
-            ui.panel(ui.table(dfb.binance_ohlcv_1m), title="Binance OHLCV 1m"),
-            ui.panel(ui.table(dfb.tv_quotes), title="TV Quotes (delayed)"),
-            ui.panel(ui.table(dfb.tv_ohlcv_1m), title="TV OHLCV 1m"),
-            ui.panel(ui.table(dfb.tv_ohlcv_5m), title="TV OHLCV 5m"),
+            ui.panel(ui.table(dfb.get_binance_trades_table()), title="Binance Trades"),
+            ui.panel(ui.table(dfb.get_binance_ohlcv_1m_table()), title="Binance OHLCV 1m"),
+            ui.panel(ui.table(dfb.get_tv_quotes_table()), title="TV Quotes (delayed)"),
+            ui.panel(ui.table(dfb.get_tv_ohlcv_1m_table()), title="TV OHLCV 1m"),
+            ui.panel(ui.table(dfb.get_tv_ohlcv_5m_table()), title="TV OHLCV 5m"),
             active_item_index=0,
             height=80,
         ),
