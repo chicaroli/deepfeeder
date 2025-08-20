@@ -28,9 +28,14 @@ def _symbol_filter_expr(spec, symbol) -> str:
     return f"({ors})"
 
 def _filter_fields(msg: dict, fields: Optional[Iterable[str]]) -> dict:
+    """Filter top-level message keys, always preserving metadata.
+
+    If fields is falsy, returns msg unchanged. Otherwise, keeps requested keys plus
+    standard structural keys (version, type, symbol, timestamp, meta).
+    """
     if not fields:
         return msg
-    keep = set(fields) | {"version", "type", "symbol", "timestamp"}
+    keep = set(fields) | {"version", "type", "symbol", "timestamp", "meta"}
     return {k: v for k, v in msg.items() if k in keep}
 
 def _rename_snapshot_cols(df: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataFrame:
@@ -40,4 +45,3 @@ def _rename_snapshot_cols(df: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataF
     if "Symbol" in out.columns and out["Symbol"].dtype == object:
         out["Symbol"] = out["Symbol"].str.lower()
     return out
-

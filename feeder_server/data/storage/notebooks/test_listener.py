@@ -43,7 +43,7 @@ def print_batch(batch):
 provider = "binance"
 data_schema = "ohlcv_1m"
 symbol = "BTCUSDT"
-cols = ['Timestamp', 'Symbol', 'BarId', 'Open', 'High', 'Low', 'Close', 'Volume']
+cols = ['Timestamp', 'Symbol', 'BarId', 'Close', 'Volume']
 spec = mfb.fanout.get_schemas()[(provider, data_schema)]
 view = spec.table_fn().where(f"{spec.symbol_col}=='{symbol}'").view(cols)
 SymListener = mfb.fanout.get_sym_listener()

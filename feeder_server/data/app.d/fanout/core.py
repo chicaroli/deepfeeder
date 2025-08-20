@@ -5,7 +5,7 @@ MarketFeeder orchestration for subscriptions, snapshots, and replay.
 import pandas as pd
 from typing import Dict, Set, Callable, Optional, Iterable, Tuple
 from .listener import _SymListener
-from .schemas import SCHEMAS, SchemaSpec
+from .schemas import SCHEMAS
 from .utils import _symbol_filter_expr, _filter_fields, _rename_snapshot_cols, _today_expr
 
 class MarketFeeder:
@@ -56,6 +56,9 @@ class MarketFeeder:
                     pass
         lsn = _SymListener(provider, data_schema, symbol, spec, view, emit_completed)
         lsn.start()
+        # Removed explicit lsn.start(): listen() already starts the listener in current Deephaven versions; calling
+        # start() again causes a RuntimeError ("Attempting to start an already started listener..."). If future versions
+        # require explicit start, reintroduce with a defensive try/except similar to _SymListener.start().
         self._lsn[key] = lsn
         self._subs.setdefault(key, set())
 

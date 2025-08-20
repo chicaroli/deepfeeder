@@ -1,15 +1,15 @@
 [
   {
     "provider": "binance",
-    "name": "btc",
-    "symbols": ["btcusdt"],
+    "name": "main",
+    "symbols": ["btcusdt", "ethusdt"],
     "autostart": true
   },
   {
     "provider": "binance",
-    "name": "crypto",
-    "symbols": ["ethusdt", "ltcusdt", "solusdt", "maticusdt", "avaxusdt"],
-    "autostart": true
+    "name": "other",
+    "symbols": ["ltcusdt", "solusdt", "maticusdt", "avaxusdt"],
+    "autostart": false
   },
   {
     "provider": "tradingview",
@@ -18,6 +18,14 @@
       "BMFBOVESPA:INDV2025", "BMFBOVESPA:WINV2025",
       "BMFBOVESPA:DOLU2025", "BMFBOVESPA:WDOV2025"
     ],
+    "autostart": false
+  },
+ {
+    "provider": "tradingview",
+    "name": "b3_di",
+    "symbols": [
+      "BMFBOVESPA:DI1Z2025", "BMFBOVESPA:DI1N2026"
+    ],
     "autostart": true
-  }
+  }  
 ]

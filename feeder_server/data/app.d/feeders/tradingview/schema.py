@@ -1,6 +1,7 @@
 # ingest.feeders.providers.tradingview.schema
 from deephaven import DynamicTableWriter, agg
 import deephaven.dtypes as dht
+from feeders.bins import bins_today
 
 # --- Schema metadata (exported) ---
 TV_QUOTES_TIME_COL = "LpTime"
@@ -10,15 +11,17 @@ TV_QUOTES_SCHEMA_COLS = (
 )
 TV_OHLCV_TIME_COL = "Timestamp"
 TV_OHLCV_SYMBOL_COL = "Symbol"
-TV_OHLCV_1M_SCHEMA_COLS = (
+# Unified OHLCV schema (common to all minute aggregations)
+TV_OHLCV_SCHEMA_COLS = (
     "Timestamp", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "Vwap"
 )
-TV_OHLCV_5M_SCHEMA_COLS = TV_OHLCV_1M_SCHEMA_COLS  # identical column layout
+TV_OHLCV_FILLED_SCHEMA_COLS = TV_OHLCV_SCHEMA_COLS + ("IsEmpty",)
 
 __all__ = [
-    'tv_quotes_writer', 'tv_quotes_table', 'tv_ohlcv_1m_from_quotes', 'tv_ohlcv_5m_from_quotes', 'tv_synthetic_trades_view',
+    'tv_quotes_writer', 'tv_quotes_table', 'tv_ohlcv_1m_from_quotes', 'tv_ohlcv_5m_from_quotes',
+    'tv_ohlcv_1m_filled', 'tv_ohlcv_5m_filled', 'tv_synthetic_trades_view',
     'TV_QUOTES_TIME_COL', 'TV_QUOTES_SYMBOL_COL', 'TV_QUOTES_SCHEMA_COLS',
-    'TV_OHLCV_TIME_COL', 'TV_OHLCV_SYMBOL_COL', 'TV_OHLCV_1M_SCHEMA_COLS', 'TV_OHLCV_5M_SCHEMA_COLS'
+    'TV_OHLCV_TIME_COL', 'TV_OHLCV_SYMBOL_COL', 'TV_OHLCV_SCHEMA_COLS', 'TV_OHLCV_FILLED_SCHEMA_COLS'
 ]
 
 _TV_QUOTES_DTW = DynamicTableWriter({
@@ -59,7 +62,7 @@ def tv_ohlcv_1m_from_quotes():
         'BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / MINUTE)',
         'Vwap = Volume == 0 ? null : PriceQty / Volume',
     ]).drop_columns(['PriceQty'])
-    return bars
+    return bars.view(list(TV_OHLCV_SCHEMA_COLS))
 
 def tv_ohlcv_5m_from_quotes():
     t = _TV_QUOTES_DTW.table.update([
@@ -80,7 +83,29 @@ def tv_ohlcv_5m_from_quotes():
         'BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / (5 * MINUTE))',
         'Vwap = Volume == 0 ? null : PriceQty / Volume',
     ]).drop_columns(['PriceQty'])
-    return bars
+    return bars.view(list(TV_OHLCV_SCHEMA_COLS))
+
+def tv_ohlcv_1m_filled():
+    """Gap-filled 1m OHLCV with IsEmpty flag (no forward fill)."""
+    sparse = tv_ohlcv_1m_from_quotes()
+    symbols = sparse.where("Timestamp >= lowerBin(now(), DAY)").select_distinct("Symbol")
+    bins = bins_today(1)
+    grid = symbols.join(bins)
+    filled = grid.natural_join(sparse, on=["Symbol", "Timestamp"]).update_view([
+        "IsEmpty = isNull(Volume)"
+    ])
+    return filled.view(list(TV_OHLCV_FILLED_SCHEMA_COLS))
+
+def tv_ohlcv_5m_filled():
+    """Gap-filled 5m OHLCV with IsEmpty flag (no forward fill)."""
+    sparse = tv_ohlcv_5m_from_quotes()
+    symbols = sparse.where("Timestamp >= lowerBin(now(), DAY)").select_distinct("Symbol")
+    bins5 = bins_today(5)
+    grid = symbols.join(bins5)
+    filled = grid.natural_join(sparse, on=["Symbol","Timestamp"]).update_view([
+        'IsEmpty = isNull(Volume)'
+    ])
+    return filled.view(list(TV_OHLCV_FILLED_SCHEMA_COLS))
 
 def tv_synthetic_trades_view():
     t = _TV_QUOTES_DTW.table.update([

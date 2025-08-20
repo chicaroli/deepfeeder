@@ -12,6 +12,7 @@ from typing import Any
 
 from .core import market_feeder, SYM_LISTENER
 from .schemas import SCHEMAS
+from .monitor import get_fanout_stats_table
 
 def get_market_feeder() -> Any:
     """Return the market_feeder singleton from fanout.core."""
@@ -28,4 +29,10 @@ def get_schemas() -> Any:
     return SCHEMAS
 
 
-__all__ = ["get_market_feeder", "get_sym_listener", "get_schemas", "market_feeder"]
+__all__ = [
+    "get_market_feeder",
+    "get_sym_listener",
+    "get_schemas",
+    "get_fanout_stats_table",
+    "market_feeder",
+]

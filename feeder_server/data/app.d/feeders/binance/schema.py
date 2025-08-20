@@ -1,14 +1,16 @@
 # feeders/binance/schema.py
-from deephaven import DynamicTableWriter, agg
+from deephaven import DynamicTableWriter, agg, time_table, empty_table
+from deephaven.table_factory import merge
 import deephaven.dtypes as dht
+from feeders.bins import bins_today
 
-# --- Schema metadata (exported) ---
-BINANCE_OHLCV_1M_TIME_COL = "Timestamp"
-BINANCE_OHLCV_1M_SYMBOL_COL = "Symbol"
-BINANCE_OHLCV_1M_SCHEMA_COLS = (
-    "Timestamp", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "Trades", "Vwap",
-    "BuyerMakerCount"
+# --- Unified Schema metadata (exported) ---
+BINANCE_OHLCV_TIME_COL = "Timestamp"
+BINANCE_OHLCV_SYMBOL_COL = "Symbol"
+BINANCE_OHLCV_SCHEMA_COLS = (
+    "Timestamp", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "Trades", "Vwap", "BuyerMakerCount"
 )
+BINANCE_OHLCV_FILLED_SCHEMA_COLS = BINANCE_OHLCV_SCHEMA_COLS + ("IsEmpty",)
 BINANCE_TRADES_TIME_COL = "Timestamp"
 BINANCE_TRADES_SYMBOL_COL = "Symbol"
 BINANCE_TRADES_SCHEMA_COLS = (
@@ -16,8 +18,9 @@ BINANCE_TRADES_SCHEMA_COLS = (
 )
 
 __all__ = [
-    'binance_trades_writer', 'binance_trades_table', 'binance_ohlcv_1m',
-    'BINANCE_OHLCV_1M_TIME_COL', 'BINANCE_OHLCV_1M_SYMBOL_COL', 'BINANCE_OHLCV_1M_SCHEMA_COLS',
+    'binance_trades_writer', 'binance_trades_table',
+    'binance_ohlcv_1m', 'binance_ohlcv_1m_filled', 'binance_ohlcv_5m', 'binance_ohlcv_5m_filled',
+    'BINANCE_OHLCV_TIME_COL', 'BINANCE_OHLCV_SYMBOL_COL', 'BINANCE_OHLCV_SCHEMA_COLS', 'BINANCE_OHLCV_FILLED_SCHEMA_COLS',
     'BINANCE_TRADES_TIME_COL', 'BINANCE_TRADES_SYMBOL_COL', 'BINANCE_TRADES_SCHEMA_COLS'
 ]
 
@@ -46,7 +49,7 @@ def binance_ohlcv_1m():
         'BuyerMakerCount = IsBuyerMaker ? 1 : 0',
         'PriceQty = Price * Quantity',
     ])
-    ohlc = t.agg_by(
+    bars = t.agg_by(
         aggs=[
             agg.first('Open=Price'),
             agg.max_('High=Price'),
@@ -62,4 +65,46 @@ def binance_ohlcv_1m():
         'BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / MINUTE)',
         'Vwap = Volume == 0 ? null : PriceQty / Volume',
     ]).drop_columns(['PriceQty'])
-    return ohlc
+    return bars.view(list(BINANCE_OHLCV_SCHEMA_COLS))
+
+def binance_ohlcv_1m_filled():
+    """Gap-filled 1m bars with IsEmpty flag (no forward fill)."""
+    sparse = binance_ohlcv_1m()
+    symbols = sparse.where("Timestamp >= lowerBin(now(), DAY)").select_distinct("Symbol")
+    bins = bins_today(1)
+    grid = symbols.join(bins)
+    filled = grid.natural_join(sparse, on=["Symbol", "Timestamp"]).update_view(["IsEmpty = isNull(Volume)"])
+    return filled.view(list(BINANCE_OHLCV_FILLED_SCHEMA_COLS))
+
+def binance_ohlcv_5m():
+    one_m = binance_ohlcv_1m()
+    t = one_m.update([
+        'T5 = lowerBin(Timestamp, 5 * MINUTE)',
+        'PriceQty = (Volume == 0 ? 0 : Vwap * Volume)',
+    ])
+    bars = t.agg_by(
+        aggs=[
+            agg.first('Open=Open'),
+            agg.max_('High=High'),
+            agg.min_('Low=Low'),
+            agg.last('Close=Close'),
+            agg.sum_('Volume=Volume'),
+            agg.sum_('Trades=Trades'),
+            agg.sum_('BuyerMakerCount=BuyerMakerCount'),
+            agg.sum_('PriceQty=PriceQty'),
+        ],
+        by=['Symbol', 'T5'],
+    ).update_view([
+        'Timestamp = T5',
+        'BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / (5 * MINUTE))',
+        'Vwap = Volume == 0 ? null : PriceQty / Volume',
+    ]).drop_columns(['T5','PriceQty'])
+    return bars.view(list(BINANCE_OHLCV_SCHEMA_COLS))
+
+def binance_ohlcv_5m_filled():
+    sparse = binance_ohlcv_5m()
+    symbols = sparse.where("Timestamp >= lowerBin(now(), DAY)").select_distinct("Symbol")
+    bins5 = bins_today(5)
+    grid = symbols.join(bins5)
+    filled = grid.natural_join(sparse, on=["Symbol","Timestamp"]).update_view(['IsEmpty = isNull(Volume)'])
+    return filled.view(list(BINANCE_OHLCV_FILLED_SCHEMA_COLS))
