@@ -106,6 +106,7 @@ FeederDashboard = ui.dashboard(
             ui.stack(
                 _status_panel(),
                 ui.panel(ui.table(dfb.get_configs_table()), title="Configs (live)"),
+                ui.panel(ui.table(dfb.get_threads_table()), title="Threads / Services (live)"),
                 active_item_index=0,
             ),
             height=20,

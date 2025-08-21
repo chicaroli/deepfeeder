@@ -286,7 +286,3 @@ class FeederManager:
                 "last_error": getattr(f, "last_error", None),
             }
         return out
-
-
-# Singleton instance
-feeder_manager = FeederManager()

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import time
 from typing import Dict, List, Any, Optional, Tuple
-from threading import Thread, Event
 from datetime import datetime, timezone
 
 import websocket
@@ -59,8 +58,7 @@ class _SymState:
 class TradingViewFeeder(BaseFeeder):
     def __init__(self, name: str, symbols: List[str]):
         super().__init__("tradingview", name, symbols)
-        self.stop_event = Event()
-        self.thread = Thread(target=self._run, daemon=True, name=f"tv:{name}")
+        self.thread = None  # created on start via DHThread spawn
         self.ws = None
         self._writer = tv_quotes_writer()
         self._sym_meta: Dict[str, Tuple[Optional[str], str, str]] = {}
@@ -79,16 +77,21 @@ class TradingViewFeeder(BaseFeeder):
         if self.is_alive():
             self.emit_status(force=True)
             return "already running"
-        self.stop_event.clear()
         self.started_at = time.time()
         self.last_error = None
-        self.thread = Thread(target=self._run, daemon=True, name=f"tv:{self.name}")
-        self.thread.start()
+        from runtime.dh_thread import spawn
+        self.thread = spawn("feeder", f"{self.provider}:{self.name}", "ws_loop", self._run)
         self.emit_status(force=True)
         return "started"
 
     def stop(self):
-        self.stop_event.set()
+        try:
+            if self.thread is not None:
+                stop_method = getattr(self.thread, "stop", None)
+                if callable(stop_method):
+                    stop_method()
+        except Exception:
+            pass
         try:
             if self.ws:
                 self.ws.close()
@@ -176,9 +179,9 @@ class TradingViewFeeder(BaseFeeder):
             self.last_msg_ts = st.t
         self.emit_status()
 
-    def _run(self):
+    def _run(self, stop_event: Any):  # DHThread passes a threading.Event
         delay = 1
-        while not self.stop_event.is_set():
+        while not stop_event.is_set():
             try:
                 self.ws = websocket.WebSocketApp(
                     WS_URL,
@@ -194,7 +197,7 @@ class TradingViewFeeder(BaseFeeder):
                 print(f"[tradingview:{self.name}] ws error: {e}")
             finally:
                 self.ws = None
-                if not self.stop_event.is_set():
+                if not stop_event.is_set():
                     time.sleep(min(delay, 15))
                     delay = min(delay * 2, 15)
                 self.emit_status(force=True)

@@ -31,12 +31,7 @@ if autostart_env not in ("0", "false", "False"):
     try:
         _log("autostart enabled: starting configured feeders...")
         result = dfb.feeder_manager.start_all_autostart()
-        # Provide concise summary if possible
-        if isinstance(result, dict):
-            started = result.get("started") or result.get("success") or result
-            _log(f"autostart result: {started}")
-        else:
-            _log(f"autostart result: {result}")
+        _log(f"autostart result: {result}")
     except Exception as exc:  # noqa: BLE001 broad so app still loads
         _log(f"autostart failed: {exc!r}")
 else:

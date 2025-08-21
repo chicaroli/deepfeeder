@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import List
 import json, websocket, time
-from threading import Thread, Event
+
 from datetime import datetime, timezone
 
 from deephaven.time import to_j_instant
@@ -14,9 +14,8 @@ class BinanceFeeder(BaseFeeder):
     def __init__(self, name: str, symbols: List[str]):
         super().__init__('binance', name, symbols)
         self._trades_writer = binance_trades_writer()
-        self.stop_event = Event()
         self.ws = None
-        self.thread = Thread(target=self._run, daemon=True, name=f"bf:{name}")
+        self.thread = None  # will be created on start()
 
     def is_alive(self) -> bool:
         return self.thread is not None and self.thread.is_alive()
@@ -25,16 +24,24 @@ class BinanceFeeder(BaseFeeder):
         if self.is_alive():
             self.emit_status(force=True)
             return 'already running'
-        self.stop_event.clear()
+        # self.stop_event.clear()
         self.started_at = time.time()
         self.last_error = None
-        self.thread = Thread(target=self._run, daemon=True, name=f"bf:{self.name}")
-        self.thread.start()
+        from runtime.dh_thread import spawn
+        self.thread = spawn("feeder", f"{self.provider}:{self.name}", "ws_loop", self._run)
         self.emit_status(force=True)
         return 'started'
 
     def stop(self):
-        self.stop_event.set()
+        # Signal managed thread to stop
+        try:
+            if self.thread is not None:
+                # DHThread exposes stop() method
+                stop_method = getattr(self.thread, "stop", None)
+                if callable(stop_method):
+                    stop_method()
+        except Exception:
+            pass
         try:
             if self.ws:
                 self.ws.close()
@@ -72,10 +79,10 @@ class BinanceFeeder(BaseFeeder):
             self.last_error = str(ex)
             self.emit_status(force=True)
 
-    def _run(self):
+    def _run(self, stop_event: Event):
         url = 'wss://stream.binance.com:9443/stream?streams=' + '/'.join(f"{s}@trade" for s in self.symbols)
         delay = 1
-        while not self.stop_event.is_set():
+        while not stop_event.is_set():
             try:
                 self.ws = websocket.WebSocketApp(
                     url,
@@ -91,7 +98,7 @@ class BinanceFeeder(BaseFeeder):
                 print(f"[binance:{self.name}] ws error: {e}")
             finally:
                 self.ws = None
-                if not self.stop_event.is_set():
+                if not stop_event.is_set():
                     import random, time as _t
                     _t.sleep(delay + random.uniform(0, 0.5))
                     delay = min(delay * 2, 15)
