@@ -1,2 +1,4 @@
 # This requirements file is for the DeepHaven Python client, installed inside a Docker container.
 websocket-client>=1.8.0
+pyarrow>=14
+duckdb>=1.0.0

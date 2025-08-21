@@ -37,8 +37,42 @@ _BINANCE_TRADES_DTW = DynamicTableWriter({
     'IsBuyerMaker': dht.bool_,
 })
 
+# --- mirrored writer with taps ---------------------------------------------
+_BINANCE_TAPS = []  # list[callable]
+
+
+class _MirroredWriter:
+    def __init__(self, dtw: DynamicTableWriter):
+        self._dtw = dtw
+
+    def write_row(self, *args):
+        self._dtw.write_row(*args)
+        # best-effort taps; copy to avoid mutation during iteration
+        for fn in list(_BINANCE_TAPS):
+            try:
+                fn(*args)
+            except Exception:
+                pass
+
+    # Bypass taps (used by replay)
+    def write_row_direct(self, *args):
+        self._dtw.write_row(*args)
+
+    @property
+    def table(self):
+        return self._dtw.table
+
+
+_BINANCE_TRADES_MIRROR = _MirroredWriter(_BINANCE_TRADES_DTW)
+
+
+def register_binance_trades_tap(fn):
+    """Register a tap to receive every write_row call arguments."""
+    _BINANCE_TAPS.append(fn)
+
+
 def binance_trades_writer():
-    return _BINANCE_TRADES_DTW
+    return _BINANCE_TRADES_MIRROR
 
 def binance_trades_table():
     return _BINANCE_TRADES_DTW.table

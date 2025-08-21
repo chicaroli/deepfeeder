@@ -8,6 +8,7 @@ only performed via explicit function calls.
 import os
 from datetime import datetime, timezone
 import deepfeeder as dfb
+from persistence import ensure_dirs  # type: ignore
 from runtime.eventlog import emit_event  # type: ignore
 
 # --- logging helpers -------------------------------------------------------
@@ -40,6 +41,19 @@ register_ui_env = os.getenv("DEEPFEEDER_REGISTER_UI", "1")
 _log("package imported: use 'import deepfeeder as dfb'", name="IMPORT")
 _log(f"env DEEPFEEDER_AUTOSTART={autostart_env!r} DEEPFEEDER_REGISTER_UI={register_ui_env!r}", name="ENV")
 
+# --- persistence autostart (before feeders) --------------------------------
+
+ensure_dirs()
+journal_autostart_env = os.getenv("DEEPFEEDER_JOURNAL_AUTOSTART", "1")
+if journal_autostart_env not in ("0", "false", "False"):
+    try:
+        msg = dfb.start_journal()
+        _log(f"journal autostart: {msg}", name="PERSIST")
+    except Exception as exc:  # noqa: BLE001
+        _log(f"journal autostart failed: {exc!r}", name="PERSIST", level="ERROR")
+else:
+    _log("journal autostart disabled by environment", name="PERSIST")
+
 # --- optional autostart ----------------------------------------------------
 
 if autostart_env not in ("0", "false", "False"):
@@ -70,3 +84,4 @@ if register_ui_env not in ("0", "false", "False"):
             pass
 else:
     _log("UI dashboard registration disabled by environment", name="UI_REGISTER")
+

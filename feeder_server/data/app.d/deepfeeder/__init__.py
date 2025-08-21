@@ -29,6 +29,7 @@ from fanout import get_fanout_stats_table as fanout_get_stats_table
 from runtime.threads_bus import get_threads_table
 from runtime.eventlog_bus import get_eventlog_table
 from runtime.services import Services
+from persistence import JournalService, ensure_dirs
 
 import feeders  # convenience namespace
 import ingest   # convenience namespace
@@ -39,6 +40,7 @@ import runtime  # convenience namespace
 # --- services container ----------------------------------------------------
 services = Services()
 services.register("feeder_manager", lambda: FeederManager())
+services.register("journal", lambda: JournalService())
 
 def get_service(name: str):
     """Retrieve a service instance by name (lazy)."""
@@ -99,9 +101,33 @@ __all__ = [
     "get_tv_ohlcv_5m_table", "get_tv_ohlcv_5m_filled_table",
     # Helpers
     "tables", "get_fanout_stats_table",
+    # Persistence bindings (lazy)
+    "start_journal", "stop_journal", "replay_binance", "replay_tv", "purge_hot_partitions",
     # Namespaces
     "feeders", "ingest", "fanout", "ui",
     "runtime",
     # Event log
     "get_eventlog_table",
 ]
+
+# --- persistence convenience funcs (lazy through service container) ---------
+
+def start_journal() -> str:
+    ensure_dirs()
+    return services.get("journal").start()
+
+
+def stop_journal() -> str:
+    return services.get("journal").stop()
+
+
+def replay_binance(symbol: str, t0_iso: str, t1_iso: str) -> str:
+    return services.get("journal").replay_binance(symbol, t0_iso, t1_iso)
+
+
+def replay_tv(symbol: str, t0_iso: str, t1_iso: str) -> str:
+    return services.get("journal").replay_tv(symbol, t0_iso, t1_iso)
+
+
+def purge_hot_partitions(keep_days: int = 14) -> int:
+    return services.get("journal").purge_hot_partitions(keep_days)

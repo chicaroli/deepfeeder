@@ -1,3 +1,9 @@
+# --- Deepfeeder runtime persistence (never include in build context) ---
+# We persist Parquet and DuckDB under feeder_server/data/persistence at runtime via bind mounts.
+# Exclude these from the Docker build context to avoid accidental COPY into the image.
+data/persistence/
+data/persistence/**
+
 __pycache__/
 *.pyc
 *.pyo
@@ -28,3 +34,12 @@ __pycache__/
 *.pid
 *.pid.lock
 *.coverage.*
+
+# General VCS/editor noise
+.git/
+.vscode/
+
+# Columnar and DB artifacts (avoid accidental inclusion)
+*.parquet
+*.duckdb
+*.duckdb.wal

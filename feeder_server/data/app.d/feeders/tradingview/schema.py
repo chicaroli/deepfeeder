@@ -37,8 +37,39 @@ _TV_QUOTES_DTW = DynamicTableWriter({
     'VolDelta': dht.double,
 })
 
+# --- mirrored writer with taps ---------------------------------------------
+_TV_TAPS = []
+
+
+class _MirroredWriter:
+    def __init__(self, dtw: DynamicTableWriter):
+        self._dtw = dtw
+
+    def write_row(self, *args):
+        self._dtw.write_row(*args)
+        for fn in list(_TV_TAPS):
+            try:
+                fn(*args)
+            except Exception:
+                pass
+
+    def write_row_direct(self, *args):
+        self._dtw.write_row(*args)
+
+    @property
+    def table(self):
+        return self._dtw.table
+
+
+_TV_QUOTES_MIRROR = _MirroredWriter(_TV_QUOTES_DTW)
+
+
+def register_tv_quotes_tap(fn):
+    _TV_TAPS.append(fn)
+
+
 def tv_quotes_writer():
-    return _TV_QUOTES_DTW
+    return _TV_QUOTES_MIRROR
 
 def tv_quotes_table():
     return _TV_QUOTES_DTW.table
