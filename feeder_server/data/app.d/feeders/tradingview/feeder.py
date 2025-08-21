@@ -200,14 +200,14 @@ class TradingViewFeeder(BaseFeeder):
                     WS_URL,
                     on_open=lambda ws: (self._subscribe(ws), emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "INFO", "WS_OPEN", "WebSocket open")),
                     on_message=lambda _ws, raw: self._on_message(raw),
-                    on_error=lambda _ws, e: (print(f"[tradingview:{self.name}] ws error: {e}"), emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "ERROR", "WS_ERR", f"WebSocket error callback: {e}")),
-                    on_close=lambda *_: (print(f"[tradingview:{self.name}] ws closed"), emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "WARN", "WS_CLOSED", "WebSocket closed")),
+                    # Console prints removed; structured event logging only
+                    on_error=lambda _ws, e: emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "ERROR", "WS_ERR", f"WebSocket error callback: {e}"),
+                    on_close=lambda *_: emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "WARN", "WS_CLOSED", "WebSocket closed"),
                 )
                 self.ws.run_forever(ping_interval=15, ping_timeout=10)
                 delay = 1
             except Exception as e:
                 self.last_error = str(e)
-                print(f"[tradingview:{self.name}] ws error: {e}")
                 try:
                     emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "ERROR", "WS_ERR", f"WebSocket run error: {e}", {"backoff_s": delay})
                 except Exception:

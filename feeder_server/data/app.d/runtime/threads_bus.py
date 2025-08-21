@@ -15,7 +15,6 @@ _THREADS_WRITER = DynamicTableWriter({
     "started_at":     dht.Instant,
     "last_heartbeat": dht.Instant,
     "uptime_s":       dht.long,
-    "restart_count":  dht.int32,
     "last_error":     dht.string,
     "meta":           dht.string,
 })

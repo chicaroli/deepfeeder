@@ -101,16 +101,16 @@ class BinanceFeeder(BaseFeeder):
                 self.ws = websocket.WebSocketApp(
                     url,
                     on_message=self._on_message,
-                    on_error=lambda _ws, e: (print(f"[binance:{self.name}] ws error: {e}"), emit_event("feeder", f"binance:{self.name}", "ws_loop", "ERROR", "WS_ERR", f"WebSocket error callback: {e}")),
-                    on_close=lambda *_: (print(f"[binance:{self.name}] ws closed"), emit_event("feeder", f"binance:{self.name}", "ws_loop", "WARN", "WS_CLOSED", "WebSocket closed")),
-                    on_open=lambda *_: (print(f"[binance:{self.name}] ws open"), emit_event("feeder", f"binance:{self.name}", "ws_loop", "INFO", "WS_OPEN", "WebSocket open")),
+                    # Console prints removed in favor of structured event log entries
+                    on_error=lambda _ws, e: emit_event("feeder", f"binance:{self.name}", "ws_loop", "ERROR", "WS_ERR", f"WebSocket error callback: {e}"),
+                    on_close=lambda *_: emit_event("feeder", f"binance:{self.name}", "ws_loop", "WARN", "WS_CLOSED", "WebSocket closed"),
+                    on_open=lambda *_: emit_event("feeder", f"binance:{self.name}", "ws_loop", "INFO", "WS_OPEN", "WebSocket open"),
                 )
                 emit_event("feeder", f"binance:{self.name}", "ws_loop", "INFO", "WS_CONNECT", "Connecting to Binance WS")
                 self.ws.run_forever(ping_interval=15, ping_timeout=10)
                 delay = 1
             except Exception as e:
                 self.last_error = str(e)
-                print(f"[binance:{self.name}] ws error: {e}")
                 try:
                     emit_event("feeder", f"binance:{self.name}", "ws_loop", "ERROR", "WS_ERR", f"WebSocket run error: {e}", {"backoff_s": delay})
                 except Exception:

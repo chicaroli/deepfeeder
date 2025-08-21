@@ -29,6 +29,9 @@ class BaseFeeder(ABC):
         if not force and (now - self._last_emit) < 1.0:
             return  # throttle to 1/s
         self._last_emit = now
+        uptime = int(now - self.started_at)
+        if uptime < 0:
+            uptime = 0
         self._status_writer.write_row(
             self.provider,
             self.name,
@@ -36,6 +39,6 @@ class BaseFeeder(ABC):
             ",".join(self.symbols),
             int(self.msg_count),
             self.last_msg_ts,
-            int(now - self.started_at),
+            uptime,
             self.last_error,
         )

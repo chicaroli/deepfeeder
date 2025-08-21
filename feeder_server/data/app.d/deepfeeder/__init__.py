@@ -34,6 +34,7 @@ import feeders  # convenience namespace
 import ingest   # convenience namespace
 import fanout   # convenience namespace
 import ui       # convenience namespace
+import runtime  # convenience namespace
 
 # --- services container ----------------------------------------------------
 services = Services()
@@ -99,6 +100,7 @@ __all__ = [
     "tables", "get_fanout_stats_table", "bins_today",
     # Namespaces
     "feeders", "ingest", "fanout", "ui",
+    "runtime",
     # Event log
     "get_eventlog_table",
 ]
