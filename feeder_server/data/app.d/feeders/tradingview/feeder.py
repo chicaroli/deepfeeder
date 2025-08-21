@@ -1,7 +1,7 @@
 # ingest.feeders.providers.tradingview.feeder
 from __future__ import annotations
 import json, time, collections
-from typing import Dict, List, Any, Optional, Tuple, Deque
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timezone
 from threading import Lock as _Lock
 
@@ -9,6 +9,7 @@ import websocket
 from deephaven.time import to_j_instant
 
 from feeders.base import BaseFeeder
+from feeders.common.queue_batch import QueueBatchMixin
 from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
 from .schema import tv_quotes_writer
@@ -58,30 +59,16 @@ class _SymState:
         self.chp = None
         self.last_vol = None
 
-class TradingViewFeeder(BaseFeeder):
+class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
     def __init__(self, name: str, symbols: List[str]):
         super().__init__("tradingview", name, symbols)
-        # Decoupled listener / writer pattern (mirrors Binance feeder)
         self.listener_worker = None
         self.writer_worker = None
         self.ws = None
         self._writer = tv_quotes_writer()
-        # Queue & batching (moderate defaults; TradingView update rate is lower than raw trades)
-        self._q: Deque[tuple] = collections.deque(maxlen=5000)
-        self._q_lock = _Lock()
-        # Config
         cfg = load_config()
         self._cfg = cfg
-        self._batch_size = cfg.batch_size
-        self._flush_interval_s = cfg.flush_interval_s
-        # Metrics
-        self._last_flush_ts = 0.0
-        self._avg_handler_ms = 0.0
-        self._last_metrics_emit = 0.0
-        self._metrics_interval = cfg.metrics_interval
-        self._metrics_enabled = cfg.metrics_enabled
-        self._metrics_min_q_delta = cfg.metrics_min_q_delta
-        self._last_metrics_snapshot = (0, 0.0)  # (q_len, avg_handler_ms)
+        QueueBatchMixin.__init__(self, queue_maxlen=5000)
         # Symbol meta/state
         self._sym_meta: Dict[str, Tuple[Optional[str], str, str]] = {}
         for raw in self.symbols:
@@ -101,7 +88,7 @@ class TradingViewFeeder(BaseFeeder):
             return "already running"
         self.started_at = time.time()
         self.last_error = None
-        self.writer_worker = spawn("feeder", f"{self.provider}:{self.name}", "writer", self._writer_loop)
+        self.start_writer(self.provider, self.name)
         self.listener_worker = spawn("feeder", f"{self.provider}:{self.name}", "listener", self._run)
         try:
             emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "START", "Feeder starting", {"symbols": self.symbols})
@@ -118,13 +105,7 @@ class TradingViewFeeder(BaseFeeder):
                     stop_method()
         except Exception:
             pass
-        try:
-            if self.writer_worker is not None:
-                stop_method = getattr(self.writer_worker, 'stop', None)
-                if callable(stop_method):
-                    stop_method()
-        except Exception:
-            pass
+        self.stop_writer()
         try:
             if self.ws:
                 self.ws.close()
@@ -255,80 +236,16 @@ class TradingViewFeeder(BaseFeeder):
                     delay = min(delay * 2, 15)
                 self.emit_status(force=True)
 
-    def _writer_loop(self, stop_event):  # writer loop
-        last_flush = time.time()
-        batch: list[tuple] = []
-        while not stop_event.is_set():
-            now = time.time()
-            try:
-                from threading import Lock  # silence linters
-                with self._q_lock:
-                    while self._q and len(batch) < self._batch_size:
-                        batch.append(self._q.popleft())
-            except Exception:
-                pass
-            if batch and (len(batch) >= self._batch_size or (now - last_flush) >= self._flush_interval_s):
-                try:
-                    for r in batch:
-                        self._writer.write_row(*r)
-                except Exception as e:
-                    try:
-                        emit_event("feeder", f"tradingview:{self.name}", "writer", "ERROR", "BATCH_ERR", f"Batch write error: {e}")
-                    except Exception:
-                        pass
-                batch.clear()
-                last_flush = now
-            if (now - self._last_flush_ts) >= 5:
-                self.emit_status(force=True)
-                self._last_flush_ts = now
-            time.sleep(0.02)
-        # flush at stop
-        try:
-            with self._q_lock:
-                while self._q:
-                    batch.append(self._q.popleft())
-        except Exception:
-            pass
-        for r in batch:
-            try:
-                self._writer.write_row(*r)
-            except Exception:
-                pass
+    # writer loop provided by QueueBatchMixin
 
     def emit_status(self, force: bool = False):  # override to add queue metrics via heartbeats
         super().emit_status(force=force)
-        if not self._metrics_enabled:
-            return
-        now = time.time()
-        q_len = len(self._q)
-        avg_ms = round(self._avg_handler_ms, 3)
-        prev_q, prev_avg = self._last_metrics_snapshot
-        q_delta = abs(q_len - prev_q)
-        avg_delta = abs(avg_ms - prev_avg)
-        interval_ok = (now - self._last_metrics_emit) >= self._metrics_interval
-        significant_change = q_delta >= self._metrics_min_q_delta or avg_delta >= 0.5
-        if interval_ok or significant_change:
-            metrics = {
-                'q_len': q_len,
-                'batch_size': self._batch_size,
-                'avg_handler_ms': avg_ms,
-                'q_delta': q_delta,
-                'interval_s': round(now - self._last_metrics_emit, 1) if self._last_metrics_emit else None,
-            }
-            try:
-                if self.writer_worker is not None:
-                    hb = getattr(self.writer_worker, '_hb', None)
-                    if hb is not None:
-                        hb.beat('running', meta=metrics)
-            except Exception:
-                pass
-            try:
-                if self.listener_worker is not None:
-                    hb_l = getattr(self.listener_worker, '_hb', None)
-                    if hb_l is not None:
-                        hb_l.beat('running', meta={'msg_count': int(self.msg_count)})
-            except Exception:
-                pass
-            self._last_metrics_emit = now
-            self._last_metrics_snapshot = (q_len, avg_ms)
+        self._emit_queue_metrics()
+        try:
+            if self.listener_worker is not None:
+                hb_l = getattr(self.listener_worker, '_hb', None)
+                if hb_l is not None:
+                    hb_l.beat('running', meta={'msg_count': int(self.msg_count)})
+        except Exception:
+            pass
 

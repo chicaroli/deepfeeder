@@ -1,49 +1,48 @@
 # feeders/binance/feeder.py
 from __future__ import annotations
-from typing import List, Deque, Optional
-from threading import Event, Lock
-import json, websocket, time, collections
+from typing import List
+from threading import Event
+import json, websocket, time
 from datetime import datetime, timezone
 
 from deephaven.time import to_j_instant
 
 from feeders.base import BaseFeeder
+from feeders.common.queue_batch import QueueBatchMixin
 from runtime.eventlog import emit_event
 from runtime.dh_thread import spawn
 from .schema import binance_trades_writer
-import os
+from .config import load_config
 
-class BinanceFeeder(BaseFeeder):
-    """Binance trade stream feeder with decoupled listener (network) and writer workers.
+class BinanceFeeder(BaseFeeder, QueueBatchMixin):
+    """Binance trade stream feeder.
 
-    listener_worker: receives websocket messages, parses, enqueues
-    writer_worker: flushes queue to Deephaven table in batches
+    Architecture:
+      - Network listener thread (websocket) parses messages -> builds trade row -> enqueue().
+      - Writer thread (from QueueBatchMixin) drains bounded deque and writes rows in batches based
+        on batch_size or flush_interval.
+      - Queue / batching / metrics (q_len, dropped, avg_handler_ms) centralized in QueueBatchMixin
+        and emitted via writer heartbeat meta; listener heartbeat includes msg_count.
+
+    Configuration (env overrides parsed in binance/config.py):
+      DEEPFEEDER_BINANCE_BATCH_SIZE, DEEPFEEDER_BINANCE_FLUSH_INTERVAL_S,
+      DEEPFEEDER_BINANCE_METRICS_ENABLED, DEEPFEEDER_BINANCE_METRICS_INTERVAL,
+      DEEPFEEDER_BINANCE_METRICS_MIN_Q_DELTA
+
+    Responsibilities kept here are Binance message schema parsing and websocket lifecycle.
     """
 
     def __init__(self, name: str, symbols: List[str]):
+        # Initialize BaseFeeder first (mixin __init__ is called explicitly below)
         super().__init__('binance', name, symbols)
         self._trades_writer = binance_trades_writer()
         self.ws = None
         self.listener_worker = None
-        self.writer_worker = None
-        # Queue & batching
-        self._q = collections.deque(maxlen=10000)  # (tuple rows)
-        self._q_lock = Lock()
-        self._batch_size = int(os.getenv('DEEPFEEDER_BINANCE_BATCH_SIZE', '400'))
-        self._flush_interval_s = float(os.getenv('DEEPFEEDER_BINANCE_FLUSH_INTERVAL_S', '0.1'))
-        # Metrics
-        self._last_flush_ts = 0.0
-        self._dropped_msgs = 0
-        self._consecutive_timeouts = 0
-        self._avg_handler_ms = 0.0
-        # metrics emission control (enabled by default; now uses heartbeat meta not event log)
-        self._metrics_enabled = os.getenv('DEEPFEEDER_BINANCE_METRICS_ENABLED', '1') not in ('0', 'false', 'False')
-        self._metrics_interval = float(os.getenv('DEEPFEEDER_BINANCE_METRICS_INTERVAL', '60'))  # seconds
-        self._metrics_min_q_delta = int(os.getenv('DEEPFEEDER_BINANCE_METRICS_MIN_Q_DELTA', '500'))
-        self._last_metrics_emit = 0.0
-        self._last_metrics_snapshot = (0, 0, 0.0)  # (q_len, dropped, avg_handler_ms)
+        cfg = load_config()
+        self._cfg = cfg
+        QueueBatchMixin.__init__(self, queue_maxlen=10000)
+        self._writer = self._trades_writer
 
-    # Lifecycle -------------------------------------------------
     def is_alive(self) -> bool:
         return self.listener_worker is not None and self.listener_worker.is_alive()
 
@@ -53,7 +52,7 @@ class BinanceFeeder(BaseFeeder):
             return 'already running'
         self.started_at = time.time()
         self.last_error = None
-        self.writer_worker = spawn("feeder", f"{self.provider}:{self.name}", "writer", self._writer_loop)
+        self.start_writer(self.provider, self.name)
         self.listener_worker = spawn("feeder", f"{self.provider}:{self.name}", "listener", self._run)
         try:
             emit_event("feeder", f"binance:{self.name}", "listener", "INFO", "START", "Feeder starting", {"symbols": self.symbols})
@@ -70,13 +69,7 @@ class BinanceFeeder(BaseFeeder):
                     stop_method()
         except Exception:
             pass
-        try:
-            if self.writer_worker is not None:
-                stop_method = getattr(self.writer_worker, 'stop', None)
-                if callable(stop_method):
-                    stop_method()
-        except Exception:
-            pass
+        self.stop_writer()
         try:
             if self.ws:
                 self.ws.close()
@@ -91,51 +84,17 @@ class BinanceFeeder(BaseFeeder):
         self.emit_status(force=True)
         return 'stopped'
 
-    # Status / metrics ------------------------------------------
     def emit_status(self, force: bool = False):  # type: ignore[override]
         super().emit_status(force=force)
-        if not self._metrics_enabled:
-            return
-        now = time.time()
-        q_len = len(self._q)
-        dropped = self._dropped_msgs
-        avg_ms = round(self._avg_handler_ms, 3)
-        prev_q, prev_dropped, prev_avg = self._last_metrics_snapshot
-        q_delta = abs(q_len - prev_q)
-        avg_delta = abs(avg_ms - prev_avg)
-        dropped_increase = dropped > prev_dropped
-        interval_ok = (now - self._last_metrics_emit) >= self._metrics_interval
-        significant_change = q_delta >= self._metrics_min_q_delta or dropped_increase or avg_delta >= 0.5
-        if interval_ok or significant_change:
-            metrics = {
-                'q_len': q_len,
-                'dropped': dropped,
-                'avg_handler_ms': avg_ms,
-                'batch_size': self._batch_size,
-                'q_delta': q_delta,
-                'interval_s': round(now - self._last_metrics_emit, 1) if self._last_metrics_emit else None,
-            }
-            # Update writer thread heartbeat meta (primary place for queue metrics)
-            try:
-                if self.writer_worker is not None:
-                    # Access underlying Heartbeater (_hb) to update meta
-                    hb = getattr(self.writer_worker, '_hb', None)
-                    if hb is not None:
-                        hb.beat('running', meta=metrics)
-            except Exception:
-                pass
-            # Also refresh listener heartbeat with lightweight counters
-            try:
-                if self.listener_worker is not None:
-                    hb_l = getattr(self.listener_worker, '_hb', None)
-                    if hb_l is not None:
-                        hb_l.beat('running', meta={'msg_count': int(self.msg_count), 'avg_handler_ms': avg_ms, 'dropped': dropped})
-            except Exception:
-                pass
-            self._last_metrics_emit = now
-            self._last_metrics_snapshot = (q_len, dropped, avg_ms)
+        self._emit_queue_metrics()
+        try:
+            if self.listener_worker is not None:
+                hb_l = getattr(self.listener_worker, '_hb', None)
+                if hb_l is not None:
+                    hb_l.beat('running', meta={'msg_count': int(self.msg_count)})
+        except Exception:
+            pass
 
-    # WebSocket message handler --------------------------------
     def _on_message(self, _ws, message: str):
         start = time.time()
         try:
@@ -149,13 +108,9 @@ class BinanceFeeder(BaseFeeder):
                 int(d.get('b', 0)), int(d.get('a', 0)),
                 ts_trade, bool(d.get('m'))
             )
-            with self._q_lock:
-                if len(self._q) < self._q.maxlen:
-                    self._q.append(row)
-                    self.msg_count += 1
-                    self.last_msg_ts = ts_trade
-                else:
-                    self._dropped_msgs += 1
+            self.enqueue(row)
+            self.msg_count += 1
+            self.last_msg_ts = ts_trade
         except Exception as ex:
             self.last_error = str(ex)
             try:
@@ -164,45 +119,10 @@ class BinanceFeeder(BaseFeeder):
                 pass
         finally:
             dur_ms = (time.time() - start) * 1000.0
-            self._avg_handler_ms = dur_ms if self._avg_handler_ms == 0 else (self._avg_handler_ms * 0.9 + dur_ms * 0.1)
-            if (self.msg_count % 100) == 0 and self.msg_count:  # occasional
+            self._update_handler_timing(dur_ms)
+            if (self.msg_count % 100) == 0 and self.msg_count:
                 self.emit_status()
 
-    # Writer loop -----------------------------------------------
-    def _writer_loop(self, stop_event: Event):
-        last_flush = time.time()
-        batch: list[tuple] = []
-        while not stop_event.is_set():
-            now = time.time()
-            with self._q_lock:
-                while self._q and len(batch) < self._batch_size:
-                    batch.append(self._q.popleft())
-            if batch and (len(batch) >= self._batch_size or (now - last_flush) >= self._flush_interval_s):
-                try:
-                    for r in batch:
-                        self._trades_writer.write_row(*r)
-                except Exception as e:
-                    try:
-                        emit_event("feeder", f"binance:{self.name}", "writer", "ERROR", "BATCH_ERR", f"Batch write error: {e}")
-                    except Exception:
-                        pass
-                batch.clear()
-                last_flush = now
-            if (now - self._last_flush_ts) >= 5:
-                self.emit_status(force=True)
-                self._last_flush_ts = now
-            time.sleep(0.01)
-        # Flush on stop
-        with self._q_lock:
-            while self._q:
-                batch.append(self._q.popleft())
-        for r in batch:
-            try:
-                self._trades_writer.write_row(*r)
-            except Exception:
-                pass
-
-    # Listener loop ---------------------------------------------
     def _run(self, stop_event: Event):
         url = 'wss://stream.binance.com:9443/stream?streams=' + '/'.join(f"{s}@trade" for s in self.symbols)
         delay = 1
