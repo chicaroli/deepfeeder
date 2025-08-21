@@ -28,15 +28,42 @@ def _symbol_filter_expr(spec, symbol) -> str:
     return f"({ors})"
 
 def _filter_fields(msg: dict, fields: Optional[Iterable[str]]) -> dict:
-    """Filter top-level message keys, always preserving metadata.
+    """Column-level filter for Arrow tables inside a listener batch.
 
-    If fields is falsy, returns msg unchanged. Otherwise, keeps requested keys plus
-    standard structural keys (version, type, symbol, timestamp, meta).
+    Previous behavior (now replaced) removed the *table* keys (added / updated / completed)
+    unless they were explicitly listed in ``fields``. Users typically pass *column* names
+    like ["Timestamp","Close"], which unintentionally stripped all data tables leaving only
+    ``meta``. This new behavior keeps the structural keys and, when ``fields`` is provided,
+    subsets the columns of each non-None pyarrow.Table to those requested (case-insensitive).
+
+    Rules:
+      - If ``fields`` falsy: return message unchanged.
+      - Always preserve keys: added, updated, completed, meta (and any future structural keys).
+      - For each table, select only columns whose lowercase name is in ``fields`` (lowercased).
+        If no requested columns exist in that table, the table is set to ``None`` (saves bandwidth).
+      - ``meta`` untouched; callers can still pick columns inside tables client-side if they
+        omitted filtering here.
     """
     if not fields:
         return msg
-    keep = set(fields) | {"version", "type", "symbol", "timestamp", "meta"}
-    return {k: v for k, v in msg.items() if k in keep}
+    cols_req = {f.lower() for f in fields}
+    out = dict(msg)  # shallow copy; Arrow tables are immutable so safe
+    for key in ("added", "updated", "completed"):
+        tbl = msg.get(key)
+        if tbl is None:
+            continue
+        try:
+            names = list(tbl.schema.names)
+            keep_cols = [n for n in names if n.lower() in cols_req]
+            if keep_cols:
+                # pyarrow.Table.select returns a new table with chosen columns
+                out[key] = tbl.select(keep_cols)
+            else:
+                out[key] = None  # nothing requested from this table
+        except Exception:
+            # On any unexpected failure, leave original table to avoid data loss
+            out[key] = tbl
+    return out
 
 def _rename_snapshot_cols(df: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataFrame:
     out = df.rename(columns=mapping).copy()
