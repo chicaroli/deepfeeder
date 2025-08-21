@@ -11,11 +11,17 @@ from .schemas import SchemaSpec
 import os
 import time
 from runtime.heartbeat import Heartbeater
+from ingest.manager_tables import get_status_writer
 
 class _SymListener(TableListener):
-    """Listener for a single (provider, schema, symbol) table view."""
+    """Listener for a single (provider, schema, symbol) table view.
+
+    The internal buffer is a bounded ring used for short-term replay; it is not an
+    unbounded queue. Default length can be overridden via env var
+    DEEPFEEDER_FANOUT_LISTENER_BUFFER_LEN or constructor argument.
+    """
     def __init__(self, provider: str, data_schema: str, symbol: str, spec: SchemaSpec, view, emit_completed,
-                 debug: bool = False):
+                 debug: bool = False, buf_maxlen: Optional[int] = None):
         self.provider = provider
         self.data_schema = data_schema
         self.symbol = symbol
@@ -23,7 +29,12 @@ class _SymListener(TableListener):
         self.view = view
         self.emit_completed = emit_completed
         self.curr: Optional[dict] = None
-        self.buf: deque[dict] = deque(maxlen=256)
+        if buf_maxlen is None:
+            try:
+                buf_maxlen = int(os.getenv("DEEPFEEDER_FANOUT_LISTENER_BUFFER_LEN", "256"))
+            except Exception:
+                buf_maxlen = 256
+        self.buf: deque[dict] = deque(maxlen=buf_maxlen)
         self.debug = debug
         # Heartbeat (throttled meta beats)
         self._hb = Heartbeater("fanout", f"{provider}:{data_schema}:{symbol}", "listener")
@@ -32,6 +43,15 @@ class _SymListener(TableListener):
         self._meta_min_interval = float(os.getenv("DEEPFEEDER_FANOUT_LISTENER_HEARTBEAT_MIN_INTERVAL", "2"))
         self._dbg(f"init bin_period={spec.bin_period_minutes} time_col={spec.time_col}")
         self.handle = listen(view, self)
+        # Service status (shared with feeders)
+        try:
+            self._status_writer = get_status_writer()
+        except Exception:
+            self._status_writer = None
+        self.started_at = time.time()
+        self.msg_count = 0
+        self.last_error: Optional[str] = None
+        self._last_status_emit = 0.0
 
     def start(self):
         # Use defensive start: some Deephaven versions auto-start the listener returned by listen()
@@ -155,6 +175,15 @@ class _SymListener(TableListener):
                   f"updated={(updated_tbl.num_rows if updated_tbl else 0)} " +
                   f"completed={(completed_tbl.num_rows if completed_tbl else 0)}")
         self.buf.append(batch)
+        # Update counters for status table
+        try:
+            self.msg_count += (
+                (added_tbl.num_rows if added_tbl else 0) +
+                (updated_tbl.num_rows if updated_tbl else 0) +
+                (completed_tbl.num_rows if completed_tbl else 0)
+            )
+        except Exception:
+            pass
         self.emit_completed(batch)
         # Throttled heartbeat meta update
         try:
@@ -170,6 +199,23 @@ class _SymListener(TableListener):
                     "last_completed": completed_rows,
                 })
                 self._last_meta_ts = now
+            # Emit throttled service status (~1/s)
+            if self._status_writer is not None and (now - self._last_status_emit) >= 1.0:
+                try:
+                    uptime = int(max(0, now - self.started_at))
+                    self._status_writer.write_row(
+                        "fanout",
+                        f"listener:{self.provider}:{self.data_schema}:{self.symbol}",
+                        True,
+                        str(self.symbol),
+                        int(self.msg_count),
+                        datetime.now(timezone.utc),
+                        uptime,
+                        self.last_error,
+                    )
+                except Exception:
+                    pass
+                self._last_status_emit = now
         except Exception:
             pass
 

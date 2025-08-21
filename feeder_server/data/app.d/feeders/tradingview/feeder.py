@@ -221,7 +221,7 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
                     on_error=lambda _ws, e: emit_event("feeder", f"tradingview:{self.name}", "listener", "ERROR", "WS_ERR", f"WebSocket error callback: {e}"),
                     on_close=lambda *_: emit_event("feeder", f"tradingview:{self.name}", "listener", "WARN", "WS_CLOSED", "WebSocket closed"),
                 )
-                self.ws.run_forever(ping_interval=15, ping_timeout=10)
+                self.ws.run_forever(ping_interval=25, ping_timeout=15)
                 delay = 1
             except Exception as e:
                 self.last_error = str(e)

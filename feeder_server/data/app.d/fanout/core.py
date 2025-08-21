@@ -6,6 +6,7 @@ import pandas as pd
 from typing import Dict, Set, Callable, Optional, Iterable, Tuple
 import time, os
 from runtime.heartbeat import Heartbeater
+from runtime.eventlog import emit_event
 from .listener import _SymListener
 from .schemas import SCHEMAS
 from .utils import _symbol_filter_expr, _filter_fields, _rename_snapshot_cols, _today_expr
@@ -16,7 +17,8 @@ class MarketFeeder:
         self._lsn: Dict[str, _SymListener] = {}
         self._refs: Dict[str, int] = {}
         self._subs: Dict[str, Set[Callable[[dict], None]]] = {}
-        self._handles: Dict[str, Tuple[str, Callable[[dict], None], Optional[Iterable[str]]]] = {}
+        # handle -> (key, callback, fields, only_completed)
+        self._handles: Dict[str, Tuple[str, Callable[[dict], None], Optional[Iterable[str]], bool]] = {}
         # Heartbeat for fanout core supervisor
         self._hb = Heartbeater("fanout", "market_feeder", "core")
         self._hb.beat("starting", meta={"listeners": 0, "subs": 0})
@@ -52,20 +54,37 @@ class MarketFeeder:
             for h, (k, cb, fields, only_completed) in list(self._handles.items()):
                 if k != key:
                     continue
-                # Only emit completed bars if requested
-                if only_completed:
-                    completed = msg.get("completed")
-                    if completed is None or (hasattr(completed, "num_rows") and completed.num_rows == 0):
-                        continue
                 try:
-                    cb(_filter_fields(msg, fields))
+                    if only_completed:
+                        # Emit only completed data; keep structure with empty added/updated
+                        completed = msg.get("completed")
+                        if completed is None or (hasattr(completed, "num_rows") and completed.num_rows == 0):
+                            continue  # nothing to deliver this tick
+                        slim = {"added": None, "updated": None, "completed": completed, "meta": msg.get("meta", {})}
+                        cb(_filter_fields(slim, fields))
+                    else:
+                        # Emit all tables (added, updated, completed)
+                        cb(_filter_fields(msg, fields))
                 except Exception:
                     pass
-        lsn = _SymListener(provider, data_schema, symbol, spec, view, emit_completed)
+        # Allow buffer length override per-process
+        try:
+            buf_len = int(os.getenv("DEEPFEEDER_FANOUT_LISTENER_BUFFER_LEN", "256"))
+        except Exception:
+            buf_len = 256
+        # Event: creating listener
+        try:
+            emit_event("fanout", f"{provider}:{data_schema}:{symbol}", "core", "INFO", "LISTENER_CREATE", "Creating listener", {"provider": provider, "schema": data_schema, "symbol": symbol, "buf_len": buf_len})
+        except Exception:
+            pass
+        lsn = _SymListener(provider, data_schema, symbol, spec, view, emit_completed, buf_maxlen=buf_len)
         lsn.start()
-            # Removed explicit lsn.start(): listen() already starts the listener in current Deephaven versions; calling
-            # start() again causes a RuntimeError ("Attempting to start an already started listener..."). If future versions
-            # require explicit start, reintroduce with a defensive try/except similar to _SymListener.start().
+        # Event: listener started
+        try:
+            emit_event("fanout", f"{provider}:{data_schema}:{symbol}", "core", "INFO", "LISTENER_START", "Listener started")
+        except Exception:
+            pass
+        # require explicit start, reintroduce with a defensive try/except similar to _SymListener.start().
         self._lsn[key] = lsn
         self._subs.setdefault(key, set())
         self._maybe_core_beat()
@@ -76,12 +95,23 @@ class MarketFeeder:
         l = self._lsn.pop(key, None)
         if l:
             l.stop()
+            try:
+                emit_event("fanout", f"{l.provider}:{l.data_schema}:{l.symbol}", "core", "INFO", "LISTENER_STOP", "Listener stopped")
+            except Exception:
+                pass
         self._subs.pop(key, None)
 
     def subscribe(self, provider: str, data_schema: str, symbol: str,
                   callback: Callable[[dict], None],
                   fields: Optional[Iterable[str]] = None,
                   only_completed: bool = False) -> str:
+        """Subscribe to a symbol stream.
+
+        Params:
+          - fields: Optional iterable of column names to project from Arrow tables.
+          - only_completed: If True, deliver only the 'completed' table batches (no 'added' or 'updated').
+                            If False, deliver all of added/updated/completed as available.
+        """
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per subscription is allowed. 'symbol' must be a string.")
         key = self._key(provider, data_schema, symbol)
@@ -90,6 +120,15 @@ class MarketFeeder:
         handle = f"{key}:{id(callback)}"
         self._handles[handle] = (key, callback, set(fields) if fields else None, only_completed)
         self._subs.setdefault(key, set()).add(callback)
+        # Event: subscription added
+        try:
+            emit_event("fanout", f"{provider}:{data_schema}:{symbol}", "core", "INFO", "SUBSCRIBE", "Subscriber added", {
+                "handle": handle,
+                "only_completed": bool(only_completed),
+                "fields": list(fields) if fields else [],
+            })
+        except Exception:
+            pass
         return handle
 
     def unsubscribe(self, handle: str) -> None:
@@ -103,6 +142,42 @@ class MarketFeeder:
         self._refs[key] = max(0, self._refs.get(key, 0) - 1)
         self._destroy_listener_if_unused(key)
         self._maybe_core_beat()
+        # Event: subscription removed
+        try:
+            emit_event("fanout", key, "core", "INFO", "UNSUBSCRIBE", "Subscriber removed", {"handle": handle})
+        except Exception:
+            pass
+
+    def unsubscribe_all(self) -> int:
+        """Unsubscribe all active handles and stop all listeners.
+
+        Returns the number of handles that were removed.
+        Safe to call multiple times.
+        """
+        # Remove all handles via the normal path to keep ref-counts consistent
+        handles = list(self._handles.keys())
+        for h in handles:
+            try:
+                self.unsubscribe(h)
+            except Exception:
+                # Continue best-effort
+                pass
+        # As a safety net, stop any remaining listeners and clear state
+        for key, l in list(self._lsn.items()):
+            try:
+                l.stop()
+            except Exception:
+                pass
+        self._lsn.clear()
+        self._refs.clear()
+        self._subs.clear()
+        self._maybe_core_beat()
+        # Event: all subscriptions removed
+        try:
+            emit_event("fanout", "market_feeder", "core", "INFO", "UNSUBSCRIBE_ALL", "All subscribers removed", {"removed": len(handles)})
+        except Exception:
+            pass
+        return len(handles)
 
     def get_today_snapshot(self, provider: str, data_schema: str, symbol: str,
                            fields: Optional[Iterable[str]] = None) -> pd.DataFrame:
@@ -143,7 +218,10 @@ class MarketFeeder:
             return
         wm_ts = pd.to_datetime(watermark_iso, utc=True) if watermark_iso else None
         for msg in list(lsn.buf):
-            ts = pd.to_datetime(msg["timestamp"], utc=True)
+            ts_iso = msg.get("meta", {}).get("timestamp")
+            if not ts_iso:
+                continue
+            ts = pd.to_datetime(ts_iso, utc=True)
             if wm_ts is None or ts > wm_ts:
                 send(_filter_fields(msg, fields))
 
