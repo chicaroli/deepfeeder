@@ -59,6 +59,7 @@ class Heartbeater:
         self.ctx = BeatCtx(service, name, role, started_ts=time.time())
         self._w = get_threads_writer()
         self.is_terminal = False
+        self._last_meta_json = "{}"  # preserve last non-empty meta across refresh beats
         _register(self)
 
     def _now_j(self):
@@ -69,6 +70,15 @@ class Heartbeater:
         uptime = int(uptime_s if uptime_s is not None else now - self.ctx.started_ts)
         if uptime < 0:  # guard against clock adjustments producing negative
             uptime = 0
+        if meta is not None:
+            # Update cached meta json only when caller supplies one
+            try:
+                self._last_meta_json = json.dumps(meta or {}, separators=(",", ":"))
+            except Exception:
+                # fallback to empty on serialization error but retain previous if any
+                if self._last_meta_json is None:
+                    self._last_meta_json = "{}"
+        meta_json = self._last_meta_json
         self._w.write_row(
             self.ctx.service,
             self.ctx.name,
@@ -78,7 +88,7 @@ class Heartbeater:
             self._now_j(),
             uptime,
             last_error or "",
-            json.dumps(meta or {}, separators=(",", ":")),
+            meta_json,
         )
         if state in ("stopped", "error"):
             self.is_terminal = True

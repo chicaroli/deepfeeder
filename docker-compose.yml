@@ -4,17 +4,21 @@ services:
       context: ./feeder_server
       dockerfile: Dockerfile
     container_name: deepfeeder-dh
+    env_file:
+      - .env
     ports:
       - "10001:10001"   # gRPC
       - "10000:10000"   # UI
     environment:
       PYTHONPATH: /data/app.d
       START_OPTS: >-
-        -Xms1g 
-        -Xmx2g 
+        -Xms2g 
+        -Xmx4g 
         -DAuthHandlers=io.deephaven.auth.AnonymousAuthenticationHandler 
         -Ddeephaven.application.dir=/data/app.d 
         -Ddeephaven.application.enabled=true
+      DEEPFEEDER_REGISTER_UI: "${DEEPFEEDER_REGISTER_UI:-1}"
+      DEEPFEEDER_AUTOSTART: "${DEEPFEEDER_AUTOSTART:-1}"
     volumes:
       - ./feeder_server/data:/data
     restart: unless-stopped

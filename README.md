@@ -12,7 +12,7 @@ configuration persistence for multiple data providers (Binance, TradingView – 
 |-------|----------------|-------------|
 | Ingest / Feeders | WebSocket connect, raw trade / quote writes | `feeders/binance/*`, `feeders/tradingview/*` |
 | Aggregation | Sparse OHLCV (only minutes with trades) | provider schema functions (`binance_ohlcv_1m`, etc.) |
-| Gap Fill Spine | Unified per-day minute / multi-minute bins | `feeders/bins.py` (`bins_today`) |
+| Gap Fill Spine | Minimal recent-period bins (current + previous) | `feeders/bins.py` (`bins_recent`) |
 | Filled Bars | Sparse bars joined to bins (placeholders w/ IsEmpty) | `*_ohlcv_*_filled` functions |
 | Fanout | Subscription + bar completion logic | `fanout/core.py`, `fanout/listener.py`, `fanout/schemas.py` |
 | Public API | Table getters, manager singleton | `deepfeeder/__init__.py` |
@@ -65,20 +65,23 @@ handle = mf.subscribe("binance", "ohlcv_1m", "BTCUSDT", callback, only_completed
 
 ---
 
-## Bins Utility
+## Bins Utility (Lightweight)
 
-A single cached function builds per-day time bins:
+We now only maintain a *minimal* rolling window of recent bins for bar completion. Instead of
+scaffolding the entire UTC day, we expose the current aligned bar and a fixed number of
+previous bars (default 2 total: current + previous). This dramatically reduces the row
+churn and memory footprint while still supporting forced completion of the last bar.
 
 ```python
-from feeders.bins import bins_today
-bins_1m = bins_today(1)
-bins_5m = bins_today(5)
+from feeders.bins import bins_recent
+recent_1m = bins_recent(1, 2)   # current + previous minute
+recent_5m = bins_recent(5, 2)   # current + previous 5-minute window
 ```
 
-Used to gap-fill all OHLCV intervals. Easy to extend to 10, 15, 30, 60 minutes:
+Need a longer short-term window (e.g. last hour of 5m bins)?
 
 ```python
-bins_15m = bins_today(15)
+hour_5m = bins_recent(5, 12)  # if ever required
 ```
 
 ---
@@ -100,7 +103,8 @@ No first-bar emission until a second period (placeholder or real) appears—by d
 Both 1m and 5m share unified schema column sets per provider (`BINANCE_OHLCV_SCHEMA_COLS`, `TV_OHLCV_SCHEMA_COLS`). Adding a new period:
 
 1. Aggregate sparse bars (`lowerBin(Timestamp, N * MINUTE)`).
-2. Gap-fill with `bins_today(N)`.
+2. Gap-fill (if needed) by joining against a suitable `bins_recent(N, bars_back)` window. For
+  current design we only require the most recent two bins to finalize bars.
 3. Register canonical schema name `ohlcv_Nm` → *filled* table (no parallel sparse schema in fanout).
 4. Expose sparse & filled getters only if needed for dashboards.
 
@@ -121,7 +125,8 @@ bar_1m_sparse = df.get_binance_ohlcv_1m_table()
 bar_1m_filled = df.get_binance_ohlcv_1m_filled_table()
 
 # Unified bins
-bins = df.bins_today(1)  # or 5
+# Recent bins (current + previous)
+bins = df.bins_recent(1, 2)
 
 # Threads / Services control-plane (new)
 threads_live = df.get_threads_table()  # one row per (service,name,role) latest heartbeat
@@ -147,7 +152,7 @@ feeder_server/
   data/app.d/
     deepfeeder/                # Public API
     feeders/                   # Provider implementations & schemas
-      bins.py                  # bins_today utility
+  bins.py                  # bins_recent utility (rolling minimal window)
       binance/
       tradingview/
     fanout/                    # Subscription + listener logic
@@ -175,7 +180,8 @@ Then connect via notebooks or the client.
 
 1. Implement trades (or quotes) ingestion via a DynamicTableWriter.
 2. Add a sparse OHLCV aggregation (if needed).
-3. Use `bins_today(period)` to build filled version.
+3. Use `bins_recent(period, 2)` (or a slightly larger window if required) to build the
+  minimal filled version for bar completion.
 4. Register canonical filled schema in `fanout/schemas.py`.
 5. Add getters in `deepfeeder/__init__.py` (sparse & filled as desired).
 6. Emit lifecycle / network events via `runtime.eventlog.emit_event()` (e.g. START, WS_OPEN, WS_ERR).

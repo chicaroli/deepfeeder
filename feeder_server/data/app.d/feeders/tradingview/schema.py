@@ -1,7 +1,7 @@
 # ingest.feeders.providers.tradingview.schema
 from deephaven import DynamicTableWriter, agg
 import deephaven.dtypes as dht
-from feeders.bins import bins_today
+from feeders.bins import bins_recent
 
 # --- Schema metadata (exported) ---
 TV_QUOTES_TIME_COL = "LpTime"
@@ -86,10 +86,13 @@ def tv_ohlcv_5m_from_quotes():
     return bars.view(list(TV_OHLCV_SCHEMA_COLS))
 
 def tv_ohlcv_1m_filled():
-    """Gap-filled 1m OHLCV with IsEmpty flag (no forward fill)."""
+    """Lightweight recent 1m OHLCV (current + previous) with IsEmpty flag.
+
+    Switched from full-day ``bins_today`` to minimal rolling window ``bins_recent``.
+    """
     sparse = tv_ohlcv_1m_from_quotes()
     symbols = sparse.where("Timestamp >= lowerBin(now(), DAY)").select_distinct("Symbol")
-    bins = bins_today(1)
+    bins = bins_recent(1, 2)
     grid = symbols.join(bins)
     filled = grid.natural_join(sparse, on=["Symbol", "Timestamp"]).update_view([
         "IsEmpty = isNull(Volume)"
@@ -97,10 +100,13 @@ def tv_ohlcv_1m_filled():
     return filled.view(list(TV_OHLCV_FILLED_SCHEMA_COLS))
 
 def tv_ohlcv_5m_filled():
-    """Gap-filled 5m OHLCV with IsEmpty flag (no forward fill)."""
+    """Lightweight recent 5m OHLCV (current + previous) with IsEmpty flag.
+
+    Switched from full-day enumeration to 2-bin rolling window using ``bins_recent``.
+    """
     sparse = tv_ohlcv_5m_from_quotes()
     symbols = sparse.where("Timestamp >= lowerBin(now(), DAY)").select_distinct("Symbol")
-    bins5 = bins_today(5)
+    bins5 = bins_recent(5, 2)
     grid = symbols.join(bins5)
     filled = grid.natural_join(sparse, on=["Symbol","Timestamp"]).update_view([
         'IsEmpty = isNull(Volume)'

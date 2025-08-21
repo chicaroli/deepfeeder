@@ -2,7 +2,7 @@
 from deephaven import DynamicTableWriter, agg, time_table, empty_table
 from deephaven.table_factory import merge
 import deephaven.dtypes as dht
-from feeders.bins import bins_today
+from feeders.bins import bins_recent
 
 # --- Unified Schema metadata (exported) ---
 BINANCE_OHLCV_TIME_COL = "Timestamp"
@@ -68,10 +68,15 @@ def binance_ohlcv_1m():
     return bars.view(list(BINANCE_OHLCV_SCHEMA_COLS))
 
 def binance_ohlcv_1m_filled():
-    """Gap-filled 1m bars with IsEmpty flag (no forward fill)."""
+    """Lightweight recent 1m bars (current + previous) with IsEmpty flag.
+
+    Previously this enumerated the full UTC day using ``bins_today``; now we only
+    materialize a minimal rolling window (2 bins) via ``bins_recent`` to support
+    forced completion / UI freshness with less overhead.
+    """
     sparse = binance_ohlcv_1m()
     symbols = sparse.where("Timestamp >= lowerBin(now(), DAY)").select_distinct("Symbol")
-    bins = bins_today(1)
+    bins = bins_recent(1, 2)  # current + previous minute
     grid = symbols.join(bins)
     filled = grid.natural_join(sparse, on=["Symbol", "Timestamp"]).update_view(["IsEmpty = isNull(Volume)"])
     return filled.view(list(BINANCE_OHLCV_FILLED_SCHEMA_COLS))
@@ -102,9 +107,13 @@ def binance_ohlcv_5m():
     return bars.view(list(BINANCE_OHLCV_SCHEMA_COLS))
 
 def binance_ohlcv_5m_filled():
+    """Lightweight recent 5m bars (current + previous) with IsEmpty flag.
+
+    Reduced from full-day enumeration to 2-bin rolling window using ``bins_recent``.
+    """
     sparse = binance_ohlcv_5m()
     symbols = sparse.where("Timestamp >= lowerBin(now(), DAY)").select_distinct("Symbol")
-    bins5 = bins_today(5)
+    bins5 = bins_recent(5, 2)
     grid = symbols.join(bins5)
     filled = grid.natural_join(sparse, on=["Symbol","Timestamp"]).update_view(['IsEmpty = isNull(Volume)'])
     return filled.view(list(BINANCE_OHLCV_FILLED_SCHEMA_COLS))

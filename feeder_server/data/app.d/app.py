@@ -15,7 +15,7 @@ from runtime.eventlog import emit_event  # type: ignore
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-def _log(msg: str, *, name: str = "APP", level: str = "INFO", code: int = 0) -> None:
+def _log(msg: str, *, name: str = "APP", level: str = "INFO", code: str = "APP_START") -> None:
     """Print a console line and mirror it into the unified event log.
 
     Parameters
@@ -23,7 +23,7 @@ def _log(msg: str, *, name: str = "APP", level: str = "INFO", code: int = 0) -> 
     msg: Human readable message.
     name: Event name categorizing the log (e.g. APP, AUTOSTART, UI_REGISTER).
     level: Severity level (INFO/ERROR/WARN, etc.).
-    code: Optional numeric code (reserved for future use).
+    code: Optional code for structured logging (default 0).
     """
     # Also print so users can see startup/registration feedback in console
     print(f"[deepfeeder {_ts()}] {msg}")

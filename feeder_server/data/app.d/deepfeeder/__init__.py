@@ -24,7 +24,7 @@ from feeders.tradingview import (
     tv_ohlcv_1m_filled as get_tv_ohlcv_1m_filled_table,
     tv_ohlcv_5m_filled as get_tv_ohlcv_5m_filled_table,
 )
-from feeders.bins import bins_today
+from feeders.bins import bins_recent
 from fanout import get_fanout_stats_table as fanout_get_stats_table
 from runtime.threads_bus import get_threads_table
 from runtime.eventlog_bus import get_eventlog_table
@@ -80,8 +80,9 @@ def tables() -> Dict[str, Table]:
         "tv_ohlcv_1m_filled": get_tv_ohlcv_1m_filled_table(),
         "tv_ohlcv_5m": get_tv_ohlcv_5m_table(),
         "tv_ohlcv_5m_filled": get_tv_ohlcv_5m_filled_table(),
-        "bins_1m_today": bins_today(1),
-        "bins_5m_today": bins_today(5),
+        # Lightweight recent windows (hard-coded 2 bars: current + previous)
+        "bins_1m_recent": bins_recent(1, 2),
+        "bins_5m_recent": bins_recent(5, 2),
     }
 
 # Convenience re-export
@@ -97,7 +98,7 @@ __all__ = [
     "get_tv_quotes_table", "get_tv_ohlcv_1m_table", "get_tv_ohlcv_1m_filled_table",
     "get_tv_ohlcv_5m_table", "get_tv_ohlcv_5m_filled_table",
     # Helpers
-    "tables", "get_fanout_stats_table", "bins_today",
+    "tables", "get_fanout_stats_table",
     # Namespaces
     "feeders", "ingest", "fanout", "ui",
     "runtime",

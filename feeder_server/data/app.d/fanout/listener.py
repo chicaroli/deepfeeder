@@ -9,6 +9,8 @@ from typing import Optional
 from datetime import datetime, timezone
 from .schemas import SchemaSpec
 import os
+import time
+from runtime.heartbeat import Heartbeater
 
 class _SymListener(TableListener):
     """Listener for a single (provider, schema, symbol) table view."""
@@ -23,6 +25,11 @@ class _SymListener(TableListener):
         self.curr: Optional[dict] = None
         self.buf: deque[dict] = deque(maxlen=256)
         self.debug = debug
+        # Heartbeat (throttled meta beats)
+        self._hb = Heartbeater("fanout", f"{provider}:{data_schema}:{symbol}", "listener")
+        self._hb.beat("starting", meta={"buffer_len": 0, "last_added": 0, "last_updated": 0, "last_completed": 0})
+        self._last_meta_ts = 0.0
+        self._meta_min_interval = float(os.getenv("DEEPFEEDER_FANOUT_LISTENER_HEARTBEAT_MIN_INTERVAL", "2"))
         self._dbg(f"init bin_period={spec.bin_period_minutes} time_col={spec.time_col}")
         self.handle = listen(view, self)
 
@@ -43,6 +50,10 @@ class _SymListener(TableListener):
             self.handle.stop()
         except Exception as e:
             self._dbg(f"stop ignore error: {e}")
+            pass
+        try:
+            self._hb.beat("stopped", meta={"buffer_len": len(self.buf)})
+        except Exception:
             pass
 
     def _dbg(self, msg: str):
@@ -145,9 +156,29 @@ class _SymListener(TableListener):
                   f"completed={(completed_tbl.num_rows if completed_tbl else 0)}")
         self.buf.append(batch)
         self.emit_completed(batch)
+        # Throttled heartbeat meta update
+        try:
+            now = time.time()
+            if now - self._last_meta_ts >= self._meta_min_interval:
+                added_rows = added_tbl.num_rows if added_tbl else 0
+                updated_rows = updated_tbl.num_rows if updated_tbl else 0
+                completed_rows = completed_tbl.num_rows if completed_tbl else 0
+                self._hb.beat("running", meta={
+                    "buffer_len": len(self.buf),
+                    "last_added": added_rows,
+                    "last_updated": updated_rows,
+                    "last_completed": completed_rows,
+                })
+                self._last_meta_ts = now
+        except Exception:
+            pass
 
     def on_error(self, e: Exception):
         print(f"[MarketFeeder] listener error ({self.provider}/{self.data_schema}): {e}")
+        try:
+            self._hb.beat("error", last_error=str(e))
+        except Exception:
+            pass
 
     def snapshot(self) -> dict:
         """Return a lightweight dict describing current listener state (for diagnostics)."""

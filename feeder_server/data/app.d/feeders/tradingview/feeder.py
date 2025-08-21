@@ -1,9 +1,9 @@
 # ingest.feeders.providers.tradingview.feeder
 from __future__ import annotations
-import json
-import time
-from typing import Dict, List, Any, Optional, Tuple
+import json, time, collections
+from typing import Dict, List, Any, Optional, Tuple, Deque
 from datetime import datetime, timezone
+from threading import Lock as _Lock
 
 import websocket
 from deephaven.time import to_j_instant
@@ -12,6 +12,7 @@ from feeders.base import BaseFeeder
 from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
 from .schema import tv_quotes_writer
+from .config import load_config
 
 WS_URL = "wss://data.tradingview.com/socket.io/websocket"
 
@@ -60,9 +61,28 @@ class _SymState:
 class TradingViewFeeder(BaseFeeder):
     def __init__(self, name: str, symbols: List[str]):
         super().__init__("tradingview", name, symbols)
-        self.thread = None  # created on start via DHThread spawn
+        # Decoupled listener / writer pattern (mirrors Binance feeder)
+        self.listener_worker = None
+        self.writer_worker = None
         self.ws = None
         self._writer = tv_quotes_writer()
+        # Queue & batching (moderate defaults; TradingView update rate is lower than raw trades)
+        self._q: Deque[tuple] = collections.deque(maxlen=5000)
+        self._q_lock = _Lock()
+        # Config
+        cfg = load_config()
+        self._cfg = cfg
+        self._batch_size = cfg.batch_size
+        self._flush_interval_s = cfg.flush_interval_s
+        # Metrics
+        self._last_flush_ts = 0.0
+        self._avg_handler_ms = 0.0
+        self._last_metrics_emit = 0.0
+        self._metrics_interval = cfg.metrics_interval
+        self._metrics_enabled = cfg.metrics_enabled
+        self._metrics_min_q_delta = cfg.metrics_min_q_delta
+        self._last_metrics_snapshot = (0, 0.0)  # (q_len, avg_handler_ms)
+        # Symbol meta/state
         self._sym_meta: Dict[str, Tuple[Optional[str], str, str]] = {}
         for raw in self.symbols:
             exch, tick = _split_exchange_ticker(raw)
@@ -73,7 +93,7 @@ class TradingViewFeeder(BaseFeeder):
         self._sid = f"qs_{int(time.time() * 1000)}"
 
     def is_alive(self) -> bool:
-        return self.thread is not None and self.thread.is_alive()
+        return self.listener_worker is not None and self.listener_worker.is_alive()
 
     def start(self):
         if self.is_alive():
@@ -81,9 +101,10 @@ class TradingViewFeeder(BaseFeeder):
             return "already running"
         self.started_at = time.time()
         self.last_error = None
-        self.thread = spawn("feeder", f"{self.provider}:{self.name}", "ws_loop", self._run)
+        self.writer_worker = spawn("feeder", f"{self.provider}:{self.name}", "writer", self._writer_loop)
+        self.listener_worker = spawn("feeder", f"{self.provider}:{self.name}", "listener", self._run)
         try:
-            emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "INFO", "START", "Feeder starting", {"symbols": self.symbols})
+            emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "START", "Feeder starting", {"symbols": self.symbols})
         except Exception:
             pass
         self.emit_status(force=True)
@@ -91,8 +112,15 @@ class TradingViewFeeder(BaseFeeder):
 
     def stop(self):
         try:
-            if self.thread is not None:
-                stop_method = getattr(self.thread, "stop", None)
+            if self.listener_worker is not None:
+                stop_method = getattr(self.listener_worker, 'stop', None)
+                if callable(stop_method):
+                    stop_method()
+        except Exception:
+            pass
+        try:
+            if self.writer_worker is not None:
+                stop_method = getattr(self.writer_worker, 'stop', None)
                 if callable(stop_method):
                     stop_method()
         except Exception:
@@ -102,10 +130,10 @@ class TradingViewFeeder(BaseFeeder):
                 self.ws.close()
         except Exception:
             pass
-        if self.is_alive():
-            self.thread.join(timeout=3)
+        if self.is_alive() and self.listener_worker is not None:
+            self.listener_worker.join(timeout=3)
         try:
-            emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "INFO", "STOP", "Feeder stopping")
+            emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "STOP", "Feeder stopping")
         except Exception:
             pass
         self.emit_status(force=True)
@@ -172,7 +200,7 @@ class TradingViewFeeder(BaseFeeder):
             if not material:
                 continue
             # fingerprint could be used for dedup; omitted
-            self._writer.write_row(
+            row = (
                 exch or "",
                 tick,
                 st.t,
@@ -184,32 +212,40 @@ class TradingViewFeeder(BaseFeeder):
                 st.chp,
                 vol_delta,
             )
-            self.msg_count += 1
-            self.last_msg_ts = st.t
-        self.emit_status()
+            try:
+                from threading import Lock  # local import to avoid circular issues
+                with self._q_lock:
+                    if len(self._q) < self._q.maxlen:
+                        self._q.append(row)
+                        self.msg_count += 1
+                        self.last_msg_ts = st.t
+            except Exception:
+                pass
+        if (self.msg_count % 100) == 0 and self.msg_count:
+            self.emit_status()
 
-    def _run(self, stop_event: Any):  # DHThread passes a threading.Event
+    def _run(self, stop_event: Any):  # listener loop
         delay = 1
         while not stop_event.is_set():
             try:
                 try:
-                    emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "INFO", "WS_CONNECT", "Connecting to TradingView WS")
+                    emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "WS_CONNECT", "Connecting to TradingView WS")
                 except Exception:
                     pass
                 self.ws = websocket.WebSocketApp(
                     WS_URL,
-                    on_open=lambda ws: (self._subscribe(ws), emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "INFO", "WS_OPEN", "WebSocket open")),
+                    on_open=lambda ws: (self._subscribe(ws), emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "WS_OPEN", "WebSocket open")),
                     on_message=lambda _ws, raw: self._on_message(raw),
                     # Console prints removed; structured event logging only
-                    on_error=lambda _ws, e: emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "ERROR", "WS_ERR", f"WebSocket error callback: {e}"),
-                    on_close=lambda *_: emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "WARN", "WS_CLOSED", "WebSocket closed"),
+                    on_error=lambda _ws, e: emit_event("feeder", f"tradingview:{self.name}", "listener", "ERROR", "WS_ERR", f"WebSocket error callback: {e}"),
+                    on_close=lambda *_: emit_event("feeder", f"tradingview:{self.name}", "listener", "WARN", "WS_CLOSED", "WebSocket closed"),
                 )
                 self.ws.run_forever(ping_interval=15, ping_timeout=10)
                 delay = 1
             except Exception as e:
                 self.last_error = str(e)
                 try:
-                    emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "ERROR", "WS_ERR", f"WebSocket run error: {e}", {"backoff_s": delay})
+                    emit_event("feeder", f"tradingview:{self.name}", "listener", "ERROR", "WS_ERR", f"WebSocket run error: {e}", {"backoff_s": delay})
                 except Exception:
                     pass
             finally:
@@ -218,4 +254,81 @@ class TradingViewFeeder(BaseFeeder):
                     time.sleep(min(delay, 15))
                     delay = min(delay * 2, 15)
                 self.emit_status(force=True)
+
+    def _writer_loop(self, stop_event):  # writer loop
+        last_flush = time.time()
+        batch: list[tuple] = []
+        while not stop_event.is_set():
+            now = time.time()
+            try:
+                from threading import Lock  # silence linters
+                with self._q_lock:
+                    while self._q and len(batch) < self._batch_size:
+                        batch.append(self._q.popleft())
+            except Exception:
+                pass
+            if batch and (len(batch) >= self._batch_size or (now - last_flush) >= self._flush_interval_s):
+                try:
+                    for r in batch:
+                        self._writer.write_row(*r)
+                except Exception as e:
+                    try:
+                        emit_event("feeder", f"tradingview:{self.name}", "writer", "ERROR", "BATCH_ERR", f"Batch write error: {e}")
+                    except Exception:
+                        pass
+                batch.clear()
+                last_flush = now
+            if (now - self._last_flush_ts) >= 5:
+                self.emit_status(force=True)
+                self._last_flush_ts = now
+            time.sleep(0.02)
+        # flush at stop
+        try:
+            with self._q_lock:
+                while self._q:
+                    batch.append(self._q.popleft())
+        except Exception:
+            pass
+        for r in batch:
+            try:
+                self._writer.write_row(*r)
+            except Exception:
+                pass
+
+    def emit_status(self, force: bool = False):  # override to add queue metrics via heartbeats
+        super().emit_status(force=force)
+        if not self._metrics_enabled:
+            return
+        now = time.time()
+        q_len = len(self._q)
+        avg_ms = round(self._avg_handler_ms, 3)
+        prev_q, prev_avg = self._last_metrics_snapshot
+        q_delta = abs(q_len - prev_q)
+        avg_delta = abs(avg_ms - prev_avg)
+        interval_ok = (now - self._last_metrics_emit) >= self._metrics_interval
+        significant_change = q_delta >= self._metrics_min_q_delta or avg_delta >= 0.5
+        if interval_ok or significant_change:
+            metrics = {
+                'q_len': q_len,
+                'batch_size': self._batch_size,
+                'avg_handler_ms': avg_ms,
+                'q_delta': q_delta,
+                'interval_s': round(now - self._last_metrics_emit, 1) if self._last_metrics_emit else None,
+            }
+            try:
+                if self.writer_worker is not None:
+                    hb = getattr(self.writer_worker, '_hb', None)
+                    if hb is not None:
+                        hb.beat('running', meta=metrics)
+            except Exception:
+                pass
+            try:
+                if self.listener_worker is not None:
+                    hb_l = getattr(self.listener_worker, '_hb', None)
+                    if hb_l is not None:
+                        hb_l.beat('running', meta={'msg_count': int(self.msg_count)})
+            except Exception:
+                pass
+            self._last_metrics_emit = now
+            self._last_metrics_snapshot = (q_len, avg_ms)
 

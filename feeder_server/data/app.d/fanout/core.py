@@ -4,6 +4,8 @@ MarketFeeder orchestration for subscriptions, snapshots, and replay.
 """
 import pandas as pd
 from typing import Dict, Set, Callable, Optional, Iterable, Tuple
+import time, os
+from runtime.heartbeat import Heartbeater
 from .listener import _SymListener
 from .schemas import SCHEMAS
 from .utils import _symbol_filter_expr, _filter_fields, _rename_snapshot_cols, _today_expr
@@ -15,6 +17,11 @@ class MarketFeeder:
         self._refs: Dict[str, int] = {}
         self._subs: Dict[str, Set[Callable[[dict], None]]] = {}
         self._handles: Dict[str, Tuple[str, Callable[[dict], None], Optional[Iterable[str]]]] = {}
+        # Heartbeat for fanout core supervisor
+        self._hb = Heartbeater("fanout", "market_feeder", "core")
+        self._hb.beat("starting", meta={"listeners": 0, "subs": 0})
+        self._last_core_meta_ts = 0.0
+        self._core_meta_interval = float(os.getenv("DEEPFEEDER_FANOUT_CORE_HEARTBEAT_MIN_INTERVAL", "5"))
 
     @staticmethod
     def _key(provider: str, schema: str, symbol: str) -> str:
@@ -56,11 +63,12 @@ class MarketFeeder:
                     pass
         lsn = _SymListener(provider, data_schema, symbol, spec, view, emit_completed)
         lsn.start()
-        # Removed explicit lsn.start(): listen() already starts the listener in current Deephaven versions; calling
-        # start() again causes a RuntimeError ("Attempting to start an already started listener..."). If future versions
-        # require explicit start, reintroduce with a defensive try/except similar to _SymListener.start().
+            # Removed explicit lsn.start(): listen() already starts the listener in current Deephaven versions; calling
+            # start() again causes a RuntimeError ("Attempting to start an already started listener..."). If future versions
+            # require explicit start, reintroduce with a defensive try/except similar to _SymListener.start().
         self._lsn[key] = lsn
         self._subs.setdefault(key, set())
+        self._maybe_core_beat()
 
     def _destroy_listener_if_unused(self, key: str):
         if self._refs.get(key, 0) > 0:
@@ -94,6 +102,7 @@ class MarketFeeder:
             subs.remove(callback)
         self._refs[key] = max(0, self._refs.get(key, 0) - 1)
         self._destroy_listener_if_unused(key)
+        self._maybe_core_beat()
 
     def get_today_snapshot(self, provider: str, data_schema: str, symbol: str,
                            fields: Optional[Iterable[str]] = None) -> pd.DataFrame:
@@ -188,6 +197,16 @@ class MarketFeeder:
             'buffer_total_messages': buffer_total,
             'listeners': listeners_info,
         }
+
+    # --- internal -----------------------------------------------------
+    def _maybe_core_beat(self):
+        now = time.time()
+        if now - self._last_core_meta_ts >= self._core_meta_interval:
+            try:
+                self._hb.beat("running", meta={"listeners": len(self._lsn), "subs": len(self._handles)})
+            except Exception:
+                pass
+            self._last_core_meta_ts = now
 
 # Expose singleton for App Mode
 market_feeder = MarketFeeder()
