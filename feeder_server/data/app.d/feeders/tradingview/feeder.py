@@ -9,6 +9,8 @@ import websocket
 from deephaven.time import to_j_instant
 
 from feeders.base import BaseFeeder
+from runtime.dh_thread import spawn
+from runtime.eventlog import emit_event
 from .schema import tv_quotes_writer
 
 WS_URL = "wss://data.tradingview.com/socket.io/websocket"
@@ -79,8 +81,11 @@ class TradingViewFeeder(BaseFeeder):
             return "already running"
         self.started_at = time.time()
         self.last_error = None
-        from runtime.dh_thread import spawn
         self.thread = spawn("feeder", f"{self.provider}:{self.name}", "ws_loop", self._run)
+        try:
+            emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "INFO", "START", "Feeder starting", {"symbols": self.symbols})
+        except Exception:
+            pass
         self.emit_status(force=True)
         return "started"
 
@@ -99,6 +104,10 @@ class TradingViewFeeder(BaseFeeder):
             pass
         if self.is_alive():
             self.thread.join(timeout=3)
+        try:
+            emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "INFO", "STOP", "Feeder stopping")
+        except Exception:
+            pass
         self.emit_status(force=True)
         return "stopped"
 
@@ -183,18 +192,26 @@ class TradingViewFeeder(BaseFeeder):
         delay = 1
         while not stop_event.is_set():
             try:
+                try:
+                    emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "INFO", "WS_CONNECT", "Connecting to TradingView WS")
+                except Exception:
+                    pass
                 self.ws = websocket.WebSocketApp(
                     WS_URL,
-                    on_open=lambda ws: self._subscribe(ws),
+                    on_open=lambda ws: (self._subscribe(ws), emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "INFO", "WS_OPEN", "WebSocket open")),
                     on_message=lambda _ws, raw: self._on_message(raw),
-                    on_error=lambda _ws, e: print(f"[tradingview:{self.name}] ws error: {e}"),
-                    on_close=lambda *_: print(f"[tradingview:{self.name}] ws closed"),
+                    on_error=lambda _ws, e: (print(f"[tradingview:{self.name}] ws error: {e}"), emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "ERROR", "WS_ERR", f"WebSocket error callback: {e}")),
+                    on_close=lambda *_: (print(f"[tradingview:{self.name}] ws closed"), emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "WARN", "WS_CLOSED", "WebSocket closed")),
                 )
                 self.ws.run_forever(ping_interval=15, ping_timeout=10)
                 delay = 1
             except Exception as e:
                 self.last_error = str(e)
                 print(f"[tradingview:{self.name}] ws error: {e}")
+                try:
+                    emit_event("feeder", f"tradingview:{self.name}", "ws_loop", "ERROR", "WS_ERR", f"WebSocket run error: {e}", {"backoff_s": delay})
+                except Exception:
+                    pass
             finally:
                 self.ws = None
                 if not stop_event.is_set():

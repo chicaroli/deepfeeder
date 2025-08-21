@@ -17,6 +17,7 @@ configuration persistence for multiple data providers (Binance, TradingView – 
 | Fanout | Subscription + bar completion logic | `fanout/core.py`, `fanout/listener.py`, `fanout/schemas.py` |
 | Public API | Table getters, manager singleton | `deepfeeder/__init__.py` |
 | UI | Dashboard helpers | `ui/dashboard.py` |
+| Observability | Event log (append-only), derived views | `runtime/eventlog*.py` |
 
 ---
 
@@ -130,6 +131,11 @@ fm = df.feeder_manager  # FeederManager
 fm.start("binance", "scalp", ["btcusdt"])  # start a feeder
 
 # Inspect threads table inside Deephaven UI for lifecycle / heartbeat diagnostics.
+
+# Event log (append-only): access and derive common diagnostic views
+eventlog = df.get_eventlog_table()
+recent_errors = eventlog.where("level == 'ERROR' && ts >= now()-MINUTE*10")
+latest_error_per_instance = eventlog.where("level == 'ERROR'").last_by(["service","name"])
 ```
 
 ---
@@ -172,6 +178,23 @@ Then connect via notebooks or the client.
 3. Use `bins_today(period)` to build filled version.
 4. Register canonical filled schema in `fanout/schemas.py`.
 5. Add getters in `deepfeeder/__init__.py` (sparse & filled as desired).
+6. Emit lifecycle / network events via `runtime.eventlog.emit_event()` (e.g. START, WS_OPEN, WS_ERR).
+
+### Event Log Conventions
+
+| Field | Purpose | Example |
+|-------|---------|---------|
+| service | Logical subsystem | `feeder` |
+| name | Instance identifier | `binance:scalp` |
+| role | Thread / role | `ws_loop` |
+| level | Severity | `INFO`, `WARN`, `ERROR`, `DEBUG` |
+| code | Machine tag | `START`, `WS_ERR`, `RESTART` |
+| message | Human readable detail | `WebSocket open` |
+| meta | JSON payload (compact) | `{`"symbols"`:["btcusdt"]}` |
+| corr_id | Correlate multi-step flows | backfill run id |
+| parent_corr_id | Parent correlation id | original trigger id |
+
+Recommended minimal lifecycle events: `START`, `STOP`, `WS_CONNECT`, `WS_OPEN`, `WS_CLOSED`, `WS_ERR` plus domain-specific codes (e.g. `BACKFILL_BEGIN`).
 
 ---
 

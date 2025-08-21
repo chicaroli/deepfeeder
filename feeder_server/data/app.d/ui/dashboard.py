@@ -117,6 +117,34 @@ FeederDashboard = ui.dashboard(
             ui.panel(ui.table(dfb.get_tv_quotes_table()), title="TV Quotes (delayed)"),
             ui.panel(ui.table(dfb.get_tv_ohlcv_1m_table()), title="TV OHLCV 1m"),
             ui.panel(ui.table(dfb.get_tv_ohlcv_5m_table()), title="TV OHLCV 5m"),
+            ui.panel(
+                ui.tabs(
+                    ui.tab(
+                        ui.table(
+                            # Newest first: reverse() after filtering last hour
+                            dfb.get_eventlog_table().where("ts >= (now() - HOUR)").reverse(),
+                        ),
+                        title="Last 1h",
+                    ),
+                    ui.tab(
+                        ui.table(
+                            dfb.get_eventlog_table()
+                            .where("level == `ERROR` && ts >= (now() - 10*MINUTE)")
+                            .reverse(),
+                        ),
+                        title="Errors 10m",
+                    ),
+                    ui.tab(
+                        ui.table(
+                            dfb.get_eventlog_table()
+                            .where("level == `ERROR`")
+                            .last_by(["service","name"]),
+                        ),
+                        title="Latest Error/Instance",
+                    ),
+                ),
+                title="Event Log",
+            ),
             active_item_index=0,
             height=80,
         ),

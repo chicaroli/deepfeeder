@@ -27,6 +27,7 @@ from feeders.tradingview import (
 from feeders.bins import bins_today
 from fanout import get_fanout_stats_table as fanout_get_stats_table
 from runtime.threads_bus import get_threads_table
+from runtime.eventlog_bus import get_eventlog_table
 from runtime.services import Services
 
 import feeders  # convenience namespace
@@ -67,6 +68,7 @@ def tables() -> Dict[str, Table]:
         "status": get_status_table(),
         "configs": get_configs_table(),
         "threads": get_threads_table(),
+        "eventlog": get_eventlog_table(),
         "binance_trades": get_binance_trades_table(),
         "binance_ohlcv_1m": get_binance_ohlcv_1m_table(),
         "binance_ohlcv_1m_filled": get_binance_ohlcv_1m_filled_table(),
@@ -97,4 +99,6 @@ __all__ = [
     "tables", "get_fanout_stats_table", "bins_today",
     # Namespaces
     "feeders", "ingest", "fanout", "ui",
+    # Event log
+    "get_eventlog_table",
 ]
