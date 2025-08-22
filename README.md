@@ -1,8 +1,27 @@
 # DeepFeeder
 
-**DeepFeeder** is a real-time market data feeder framework built on [Deephaven](https://deephaven.io/).
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+
+**DeepFeeder** is a real-time market data feeder framework for MFT strategies development built on [Deephaven](https://deephaven.io/).
 It provides WebSocket-based ingestion, live table updates, UI controls, gap-filled bar generation, and
 configuration persistence for multiple data providers (Binance, TradingView – extensible).
+
+## ⚠️ Disclaimer
+
+This project includes and runs a Deephaven server via Docker. No separate Deephaven installation is required.
+You must comply with Deephaven’s license and terms of service. This project is not affiliated with or endorsed by Deephaven.
+
+The TradingView feeder is for research and educational purposes only. Use at your own risk. Not intended for production or commercial use. You are responsible for complying with TradingView's terms of service and any applicable laws.
+Users are responsible for ensuring compliance with all third-party service terms and local laws when deploying or extending this project.
+
+**Status:** This is an ongoing project and is not yet complete. Features, APIs, and stability may change at any time.
+
+**Security:** Never commit secrets, API keys, or credentials. Review code and configs before deployment.
+
+**Support:**  This project is provided as-is, with no guarantees or support. Contributions are welcome via pull requests.
+
+**Platform:** The client requires Linux due to Deephaven's ticking features. Use Docker for best compatibility.
 
 ---
 
@@ -19,46 +38,41 @@ configuration persistence for multiple data providers (Binance, TradingView – 
 | UI | Dashboard helpers | `ui/dashboard.py` |
 | Observability | Event log (append-only), derived views | `runtime/eventlog*.py` |
 
----
+## Persistence Layer
 
-## Sparse vs Filled OHLCV Bars
+The persistence layer is responsible for reliable storage, journaling, compaction, replay, and schema management of all provider data. It ensures that market data is written efficiently, can be recovered or replayed, and supports schema evolution for different providers and formats.
 
-We now maintain two forms of OHLCV tables per provider & interval:
+**Main components:**
 
-- **Sparse**: Only minutes (or 5m windows) with at least one trade / quote aggregation. No empty rows.
-- **Filled**: Full time grid. Every expected period appears. Empty (no-trade) periods have all price/volume fields null and `IsEmpty = True`.
+- `persistence/`: Core journal logic, adapters, configuration
+- `persistence/journal.py`: Handles batching, flush, compaction, replay, and event logging
+- `persistence/journal_adapter.py`: Implements provider-specific partitioning, Arrow table conversion, and schema evolution
 
-### Why both?
+**Features:**
 
-- **Dashboards / Visual tables**: Sparse is cleaner (no rows of nulls). Use the sparse getters.
-- **Streaming / Completion detection**: Fanout needs a trigger at the next period boundary even if no trades; the filled table provides a placeholder row. The listener suppresses placeholder-only batches (they are used only to emit completion for the prior bar).
+- Partitioned Parquet writing for efficient storage and retrieval
+- Provider-specific partitioning and schema logic (see TradingView/Binance adapters)
+- Background compaction and replay logic for data recovery and analysis
+- Event logging for diagnostics and error tracking
 
-### Fanout Subscription Semantics
+**Usage:**
 
-The fanout *schema names* (`ohlcv_1m`, `ohlcv_5m`) now resolve to the **filled** tables internally. Clients see only completed bars (placeholders never emitted). No parallel “_filled” schema names are exposed via fanout to avoid confusion.
+The persistence layer operates automatically as part of the feeder server. All diagnostics and errors are recorded in the event log system. For details on customizing persistence, see the code and comments in the `persistence/` directory.
 
-| Subscribe Schema | Underlying Table | Placeholders Emitted? | Completion Triggered? |
-|------------------|------------------|------------------------|------------------------|
-| `ohlcv_1m`       | filled 1m        | No (suppressed)        | Yes (placeholder or real next bar) |
-| `ohlcv_5m`       | filled 5m        | No                     | Yes |
-| `trades`         | trades (sparse)  | N/A                    | All adds complete |
+Review provider API terms and data retention policies before deploying in production environments.
 
-### Choosing Tables in Notebooks / UI
+For questions or contributions, open an issue or pull request.
 
-Use getters from `deepfeeder`:
+## OHLCV Tables
+
+Both sparse and filled OHLCV tables are available per provider and interval. Use the sparse tables for display and the filled tables for bar completion and streaming workflows. See API for table getters.
+
+### Example: Subscribing to Fanout
 
 ```python
 import deepfeeder as df
 
-# Sparse (good for display)
-binance_1m_sparse = df.get_binance_ohlcv_1m_table()
-tradingview_5m_sparse = df.get_tv_ohlcv_5m_table()
-
-# Filled (full grid + IsEmpty)
-binance_1m_filled = df.get_binance_ohlcv_1m_filled_table()
-tradingview_5m_filled = df.get_tv_ohlcv_5m_filled_table()
-
-# Subscribe (always filled under the hood)
+# Subscribe to completed bars (fanout)
 mf = df.fanout.market_feeder
 handle = mf.subscribe("binance", "ohlcv_1m", "BTCUSDT", callback, only_completed=True)
 ```
@@ -145,21 +159,31 @@ latest_error_per_instance = eventlog.where("level == 'ERROR'").last_by(["service
 
 ---
 
-## Project Structure (Updated Simplified View)
+## Project Structure
 
 ```text
 feeder_server/
   data/app.d/
-    deepfeeder/                # Public API
-    feeders/                   # Provider implementations & schemas
-  bins.py                  # bins_recent utility (rolling minimal window)
-      binance/
-      tradingview/
-    fanout/                    # Subscription + listener logic
-    runtime/                   # Threads bus, heartbeats, services container
-    ui/                        # Dashboard components
-    storage/notebooks/         # Examples & tests
-feeder_client/                 # Client (Linux required for ticking)
+    deepfeeder/           # Public API
+    feeders/
+      binance/            # Binance provider
+      tradingview/        # TradingView provider
+      bins.py             # bins_recent utility
+      common/             # Shared logic
+    fanout/               # Subscription + listener logic
+    ingest/               # Feeder manager and tables
+    persistence/          # Journal, config, adapters
+    runtime/              # Threads bus, eventlog, services
+    ui/                   # Dashboard components
+    __init__.py           # App entry
+  app.py, feeder.app      # Deephaven app entrypoints
+feeder_client/
+  src/
+    connectors/           # Deephaven client connector
+    bots/                 # Example trading bot
+    ticking.py            # Ticking logic
+  tests/                  # Client unit tests
+  Dockerfile, pyproject.toml, uv.lock
 ```
 
 ---
