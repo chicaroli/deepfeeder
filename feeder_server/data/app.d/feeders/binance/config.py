@@ -3,14 +3,15 @@
 Centralizes environment-derived tuning knobs so docker-compose stays clean.
 
 Environment variables (all optional):
-  DEEPFEEDER_BINANCE_BATCH_SIZE           int   default 400
-  DEEPFEEDER_BINANCE_FLUSH_INTERVAL_S     float default 0.1
+  # Warm replay on feeder start (provider override; falls back to global)
+  DEEPFEEDER_BINANCE_REPLAY_ON_START      0/1   default 0 (fallback DEEPFEEDER_REPLAY_ON_START)
+  DEEPFEEDER_BINANCE_REPLAY_WINDOW_SECS   int   default 900 (fallback DEEPFEEDER_REPLAY_WINDOW_SECS)
+
+  DEEPFEEDER_BINANCE_BATCH_SIZE           int   default 10000
+  DEEPFEEDER_BINANCE_FLUSH_INTERVAL_S     float default 1.0
   DEEPFEEDER_BINANCE_METRICS_ENABLED      0/1   default 1
   DEEPFEEDER_BINANCE_METRICS_INTERVAL     float default 60
   DEEPFEEDER_BINANCE_METRICS_MIN_Q_DELTA  int   default 500
-    # Warm replay on feeder start (provider override; falls back to global)
-    DEEPFEEDER_BINANCE_REPLAY_ON_START      0/1   default 0 (fallback DEEPFEEDER_REPLAY_ON_START)
-    DEEPFEEDER_BINANCE_REPLAY_WINDOW_SECS   int   default 900 (fallback DEEPFEEDER_REPLAY_WINDOW_SECS)
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -18,8 +19,8 @@ import os
 
 @dataclass(slots=True)
 class BinanceConfig:
-    batch_size: int = 400
-    flush_interval_s: float = 0.1
+    batch_size: int = 10000
+    flush_interval_s: float = 1.0
     metrics_enabled: bool = True
     metrics_interval: float = 60.0
     metrics_min_q_delta: int = 500

@@ -172,6 +172,12 @@ def to_arrow_table(batch: List[Dict[str, Any]]) -> pa.Table:
     ]
     return pa.Table.from_arrays(arrays, schema=schema)
 
+# Partitioning schema for Binance: dt, symbol
+partition_schema = pa.schema([
+    ("dt", pa.string()),
+    ("symbol", pa.string()),
+])
+
 # Provider-specific replay logic for binance
 def replay(symbol: str, t0_iso: str, t1_iso: str, iter_parquet_fn) -> str:
     from datetime import datetime, timezone
@@ -205,8 +211,5 @@ def replay(symbol: str, t0_iso: str, t1_iso: str, iter_parquet_fn) -> str:
         emit_event("journal", name, "replay", "INFO", "REPLAY", f"[replay] binance {symbol} +{n}")
         return f"[replay] binance {symbol} +{n}"
     except Exception as exc:
-        try:
-            emit_event("journal", name, "replay", "ERROR", "REPLAY_ERR", f"Replay error: {exc}")
-        except Exception:
-            pass
+        emit_event("journal", name, "replay", "ERROR", "REPLAY_ERR", f"Replay error: {exc}")
         return f"[replay] binance {symbol} ERROR: {exc}"

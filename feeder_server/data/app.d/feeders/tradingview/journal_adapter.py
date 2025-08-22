@@ -38,12 +38,15 @@ def _to_utc(x):
 
 
 def to_record(args: tuple) -> Dict[str, Any]:
+    # NOTE: 'exchange' (lowercase) is required for Parquet partitioning schema.
+    #       'Exchange' (capitalized) is kept for Deephaven table compatibility.
     ts = _to_utc(args[2])
     sym_u = (args[1] or '')
     return {
         'ts': ts,
         'dt': ts.date().isoformat(),
         'symbol': sym_u.lower(),
+        'exchange': (args[0].lower() if len(args) > 0 and args[0] else None),
         'Exchange': args[0] if len(args) > 0 else None,
         'Symbol': sym_u,
         'LpTime': _to_utc(args[2]) if len(args) > 2 else None,
@@ -125,6 +128,7 @@ def to_arrow_table(batch: List[Dict[str, Any]]) -> pa.Table:
         ('ts', ts_type),
         ('dt', pa.string()),
         ('symbol', pa.string()),
+        ('exchange', pa.string()),
         ('Exchange', pa.string()),
         ('Symbol', pa.string()),
         ('LpTime', ts_type),
@@ -141,6 +145,7 @@ def to_arrow_table(batch: List[Dict[str, Any]]) -> pa.Table:
         pa.array(col('ts'), type=ts_type),
         pa.array(col('dt'), type=pa.string()),
         pa.array(col('symbol'), type=pa.string()),
+        pa.array(col('exchange'), type=pa.string()),
         pa.array(col('Exchange'), type=pa.string()),
         pa.array(col('Symbol'), type=pa.string()),
         pa.array(col('LpTime'), type=ts_type),
@@ -154,8 +159,16 @@ def to_arrow_table(batch: List[Dict[str, Any]]) -> pa.Table:
     ]
     return pa.Table.from_arrays(arrays, schema=schema)
 
+# Partitioning schema for TradingView: dt, exchange, symbol
+partition_schema = pa.schema([
+    ("dt", pa.string()),
+    ("exchange", pa.string()),
+    ("symbol", pa.string()),
+])
+
+
 # Provider-specific replay logic for tradingview
-def replay(symbol: str, t0_iso: str, t1_iso: str, iter_parquet_fn) -> str:
+def replay(symbol: str, t0_iso: str, t1_iso: str, iter_parquet_fn, exchange: str = None) -> str:
     from datetime import datetime, timezone
     t0 = datetime.fromisoformat(t0_iso.replace("Z", "+00:00")).astimezone(timezone.utc)
     t1 = datetime.fromisoformat(t1_iso.replace("Z", "+00:00")).astimezone(timezone.utc)
@@ -167,7 +180,7 @@ def replay(symbol: str, t0_iso: str, t1_iso: str, iter_parquet_fn) -> str:
         except Exception:
             pass
         n = 0
-        for r in iter_parquet_fn(base_dir, symbol, t0, t1):
+        for r in iter_parquet_fn(base_dir, symbol, t0, t1, exchange=exchange):
             # Skip legacy JSON-row files (typed rows have these keys)
             if not isinstance(r, dict) or "Symbol" not in r or "LpTime" not in r:
                 continue

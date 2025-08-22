@@ -98,17 +98,18 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
                 t1 = now.isoformat().replace("+00:00", "Z")
                 import deepfeeder as dfb  # lazy import to avoid circulars
                 for raw in self.symbols:
-                    # Normalize TV symbols to use the instrument part for replay API (which filters by Symbol)
-                    tick = raw.split(":", 1)[-1]
-                    msg = dfb.replay("tv", tick, t0, t1)
+                    # Parse exchange and symbol from TV symbol string 'EXCHANGE:SYMBOL'
+                    parts = raw.split(":", 1)
+                    if len(parts) == 2:
+                        exchange, tick = parts
+                    else:
+                        exchange, tick = None, raw
+                    msg = dfb.replay("tv", tick, t0, t1, exchange=exchange)
         except Exception:
             pass
         self.start_writer(self.provider, self.name)
         self.listener_worker = spawn("feeder", f"{self.provider}:{self.name}", "listener", self._run)
-        try:
-            emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "START", "Feeder starting", {"symbols": self.symbols})
-        except Exception:
-            pass
+        emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "START", "Feeder starting", {"symbols": self.symbols})
         self.emit_status(force=True)
         return "started"
 
@@ -128,10 +129,7 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
             pass
         if self.is_alive() and self.listener_worker is not None:
             self.listener_worker.join(timeout=3)
-        try:
-            emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "STOP", "Feeder stopping")
-        except Exception:
-            pass
+        emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "STOP", "Feeder stopping")
         self.emit_status(force=True)
         return "stopped"
 
@@ -224,10 +222,7 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
         delay = 1
         while not stop_event.is_set():
             try:
-                try:
-                    emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "WS_CONNECT", "Connecting to TradingView WS")
-                except Exception:
-                    pass
+                emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "WS_CONNECT", "Connecting to TradingView WS")
                 self.ws = websocket.WebSocketApp(
                     WS_URL,
                     on_open=lambda ws: (self._subscribe(ws), emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "WS_OPEN", "WebSocket open")),
@@ -240,10 +235,7 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
                 delay = 1
             except Exception as e:
                 self.last_error = str(e)
-                try:
-                    emit_event("feeder", f"tradingview:{self.name}", "listener", "ERROR", "WS_ERR", f"WebSocket run error: {e}", {"backoff_s": delay})
-                except Exception:
-                    pass
+                emit_event("feeder", f"tradingview:{self.name}", "listener", "ERROR", "WS_ERR", f"WebSocket run error: {e}", {"backoff_s": delay})
             finally:
                 self.ws = None
                 if not stop_event.is_set():

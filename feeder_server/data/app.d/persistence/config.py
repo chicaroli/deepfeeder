@@ -66,9 +66,9 @@ def load_config() -> JournalConfig:
 
         # compaction settings
         compact_enabled=_get_bool("DEEPFEEDER_JOURNAL_COMPACT_ENABLED", "1"),
-        compact_interval_secs=float(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_INTERVAL_SECS", "30")),
+        compact_interval_secs=float(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_INTERVAL_SECS", "120")),
         compact_stable_secs=float(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_STABLE_SECS", "10")),
-        compact_min_files=int(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_MIN_FILES", "8")),
+        compact_min_files=int(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_MIN_FILES", "5")),
         master_prefix=os.getenv("DEEPFEEDER_JOURNAL_MASTER_PREFIX", "master-"),
         
     )

@@ -88,10 +88,7 @@ class QueueBatchMixin:
                 try:
                     self._write_batch(batch)
                 except Exception as e:  # pragma: no cover
-                    try:
-                        emit_event("feeder", getattr(self, 'provider', 'unknown') + f":{getattr(self, 'name', 'unknown')}", "writer", "ERROR", "BATCH_ERR", f"Batch write error: {e}")
-                    except Exception:
-                        pass
+                    emit_event("feeder", getattr(self, 'provider', 'unknown') + f":{getattr(self, 'name', 'unknown')}", "writer", "ERROR", "BATCH_ERR", f"Batch write error: {e}")
                 batch.clear()
                 last_flush = now
             if (now - self._last_flush_ts) >= 5:

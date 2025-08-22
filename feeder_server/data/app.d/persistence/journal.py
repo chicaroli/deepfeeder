@@ -31,7 +31,7 @@ from runtime.eventlog import emit_event
 
 
 class _Sink:
-    def __init__(self, name: str, base_dir: str, to_table):
+    def __init__(self, name: str, base_dir: str, to_table, partition_schema):
         self.name = name
         self.base_dir = base_dir
         self._to_table = to_table
@@ -53,15 +53,13 @@ class _Sink:
         self._compact_min_files = self._cfg.compact_min_files
         self._master_prefix = self._cfg.master_prefix
         self._last_compact_ts = 0.0
+        self._partition_schema = partition_schema
 
     def start(self):
         if self._worker is not None:
             return
         self._worker = spawn("journal", self.name, "sink", self._run)
-        try:
-            emit_event("journal", self.name, "sink", "INFO", "SINK_START", f"sink started: base={self.base_dir}")
-        except Exception:
-            pass
+        emit_event("journal", self.name, "sink", "INFO", "SINK_START", f"sink started: base={self.base_dir}")
 
     def stop(self):
         self._stop.set()
@@ -90,10 +88,7 @@ class _Sink:
                 data=tbl,
                 base_dir=self.base_dir,
                 format="parquet",
-                partitioning=ds.partitioning(
-                    pa.schema([("dt", pa.string()), ("symbol", pa.string())]),
-                    flavor="hive"
-                    ),
+                partitioning=ds.partitioning(self._partition_schema, flavor="hive"),
                 basename_template=basename,
                 existing_data_behavior="overwrite_or_ignore",
                 create_dir=True,
@@ -101,15 +96,9 @@ class _Sink:
                 max_rows_per_group=self.max_rows_per_group or None,
             )
             if getattr(self._cfg, "log_flush_enabled", False):
-                try:
-                    emit_event("journal", self.name, "sink", "INFO", "FLUSH", f"wrote batches=1")
-                except Exception:
-                    pass
+                emit_event("journal", self.name, "sink", "INFO", "FLUSH", f"wrote batches=1")
         except Exception as exc:
-            try:
-                emit_event("journal", self.name, "sink", "ERROR", "PARQUET_WRITE", f"flush error: {exc!r}")
-            except Exception:
-                pass
+            emit_event("journal", self.name, "sink", "ERROR", "PARQUET_WRITE", f"flush error: {exc!r}")
 
     def _run(self, stop_event: Any):
         buf: List[Dict[str, Any]] = []
@@ -156,15 +145,32 @@ class _Sink:
         if not ddir:
             return
         try:
-            for entry in os.listdir(ddir):
-                # only consider modern symbol partitions: symbol=<name>
-                if not entry.startswith("symbol="):
-                    continue
-                spath = os.path.join(ddir, entry)
-                if not os.path.isdir(spath):
-                    continue
-                sym = entry.split("=", 1)[1].lower()
-                self._compact_symbol_dir(ddir, sym, spath)
+            # If partition_schema includes 'exchange', traverse exchange subdirs
+            partition_fields = [f.name for f in self._partition_schema]
+            if 'exchange' in partition_fields:
+                for exch_entry in os.listdir(ddir):
+                    if not exch_entry.startswith("exchange="):
+                        continue
+                    exch_path = os.path.join(ddir, exch_entry)
+                    if not os.path.isdir(exch_path):
+                        continue
+                    for sym_entry in os.listdir(exch_path):
+                        if not sym_entry.startswith("symbol="):
+                            continue
+                        spath = os.path.join(exch_path, sym_entry)
+                        if not os.path.isdir(spath):
+                            continue
+                        sym = sym_entry.split("=", 1)[1].lower()
+                        self._compact_symbol_dir(exch_path, sym, spath)
+            else:
+                for entry in os.listdir(ddir):
+                    if not entry.startswith("symbol="):
+                        continue
+                    spath = os.path.join(ddir, entry)
+                    if not os.path.isdir(spath):
+                        continue
+                    sym = entry.split("=", 1)[1].lower()
+                    self._compact_symbol_dir(ddir, sym, spath)
         except Exception:
             pass
 
@@ -223,15 +229,9 @@ class _Sink:
                     os.remove(fp)
                 except Exception:
                     pass
-            try:
-                emit_event("journal", self.name, "compact", "INFO", "COMPACT_DONE", f"{symbol} -> {master_name}", {"files": len(inputs), "rows": int(merged.num_rows)})
-            except Exception:
-                pass
+            emit_event("journal", self.name, "compact", "INFO", "COMPACT", f"{symbol} -> {master_name}", {"files": len(inputs), "rows": int(merged.num_rows)})
         except Exception as exc:
-            try:
-                emit_event("journal", self.name, "compact", "ERROR", "COMPACT_ERR", str(exc))
-            except Exception:
-                pass
+            emit_event("journal", self.name, "compact", "ERROR", "COMPACT", str(exc))
 
 
 class JournalService:
@@ -241,7 +241,7 @@ class JournalService:
         ensure_dirs()
         self._adapters = discover_adapters()
         # Build a sink per adapter
-        self._sinks = {a.name: _Sink(a.name, a.base_dir, a.to_arrow_table) for a in self._adapters}
+        self._sinks = {a.name: _Sink(a.name, a.base_dir, a.to_arrow_table, getattr(a, "partition_schema", pa.schema([("dt", pa.string()), ("symbol", pa.string())]))) for a in self._adapters}
         self._started = False
 
     def start(self) -> str:
@@ -261,14 +261,11 @@ class JournalService:
                             sink_.enqueue(rec)
                             after_len = len(sink_.q)
                             self._enq_counters[provider_name] += 1
-                            # Print every 100 records
-                            if self._enq_counters[provider_name] % 100 == 0:
-                                print(f"[journal] tap: provider={provider_name} enqueued={self._enq_counters[provider_name]} qlen={after_len}")
                             # Always print warning if dropped
                             if after_len == sink_.q.maxlen and before_len == after_len:
-                                print(f"[journal][WARNING] queue full for provider={provider_name}, record dropped!")
+                                emit_event("journal", provider_name, "tap", "WARNING", "QUEUE_FULL", "queue full, record dropped!")
                     except Exception as exc:
-                        print(f"[journal][ERROR] tap exception: {exc}")
+                        emit_event("journal", provider_name, "tap", "ERROR", "TAP_EXCEPTION", f"tap exception: {exc}")
                 return _tap
             try:
                 a.register_tap(_tap_factory(a, sink, a.name))
@@ -276,7 +273,6 @@ class JournalService:
                 pass
             sink.start()
         self._started = True
-        print(f"[journal] started. Enqueue counters: {self._enq_counters}")
         return "[journal] started"
 
     def stop(self) -> str:
@@ -318,6 +314,7 @@ class JournalService:
                             pass
             except Exception:
                 pass
+        emit_event("journal", "purge", "partitions", "INFO", "PURGE_DONE", f"Removed {removed} partitions older than {keep_days} days.")
         return removed
 
     # --- replay helpers ---
@@ -349,12 +346,16 @@ class JournalService:
         except Exception:
             return None
         
-    def _iter_parquet(self, base_dir: str, symbol: str, t0: datetime, t1: datetime):
+    def _iter_parquet(self, base_dir: str, symbol: str, t0: datetime, t1: datetime, exchange: str = None):
         import os
-        # iterate modern partitioned layout only
         cur = t0.date()
         while cur <= t1.date():
-            part = os.path.join(base_dir, f"dt={cur.isoformat()}", f"symbol={symbol.lower()}")
+            dt_dir = os.path.join(base_dir, f"dt={cur.isoformat()}")
+            if exchange is not None:
+                exch_dir = os.path.join(dt_dir, f"exchange={exchange.lower()}")
+                part = os.path.join(exch_dir, f"symbol={symbol.lower()}")
+            else:
+                part = os.path.join(dt_dir, f"symbol={symbol.lower()}")
             if os.path.isdir(part):
                 try:
                     dataset = ds.dataset(part, format="parquet")
@@ -376,11 +377,11 @@ class JournalService:
             cur = date.fromordinal(cur.toordinal() + 1)
 
 
-    def replay(self, provider: str, symbol: str, t0_iso: str, t1_iso: str) -> str:
+    def replay(self, provider: str, symbol: str, t0_iso: str, t1_iso: str, exchange: str = None) -> str:
         """Delegate replay to provider's journal_adapter."""
         adapter = next((a for a in self._adapters if a.name == provider), None)
         if adapter is None:
             return f"[replay] {provider} adapter not available"
         if not hasattr(adapter, "replay"):
             return f"[replay] {provider} adapter missing replay()"
-        return adapter.replay(symbol, t0_iso, t1_iso, self._iter_parquet)
+        return adapter.replay(symbol, t0_iso, t1_iso, self._iter_parquet, exchange=exchange)

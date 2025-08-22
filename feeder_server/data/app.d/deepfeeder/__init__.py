@@ -121,8 +121,8 @@ def stop_journal() -> str:
     return services.get("journal").stop()
 
 
-def replay(provider: str, symbol: str, t0_iso: str, t1_iso: str) -> str:
-    return services.get("journal").replay(provider, symbol, t0_iso, t1_iso)
+def replay(provider: str, symbol: str, t0_iso: str, t1_iso: str, exchange: str = None) -> str:
+    return services.get("journal").replay(provider, symbol, t0_iso, t1_iso, exchange=exchange)
 
 
 def purge_hot_partitions(keep_days: int = 14) -> int:

@@ -66,10 +66,7 @@ class BinanceFeeder(BaseFeeder, QueueBatchMixin):
             pass
         self.start_writer(self.provider, self.name)
         self.listener_worker = spawn("feeder", f"{self.provider}:{self.name}", "listener", self._run)
-        try:
-            emit_event("feeder", f"binance:{self.name}", "listener", "INFO", "START", "Feeder starting", {"symbols": self.symbols})
-        except Exception:
-            pass
+        emit_event("feeder", f"binance:{self.name}", "listener", "INFO", "START", "Feeder starting", {"symbols": self.symbols})
         self.emit_status(force=True)
         return 'started'
 
@@ -89,10 +86,7 @@ class BinanceFeeder(BaseFeeder, QueueBatchMixin):
             pass
         if self.is_alive() and self.listener_worker is not None:
             self.listener_worker.join(timeout=3)
-        try:
-            emit_event("feeder", f"binance:{self.name}", "listener", "INFO", "STOP", "Feeder stopping")
-        except Exception:
-            pass
+        emit_event("feeder", f"binance:{self.name}", "listener", "INFO", "STOP", "Feeder stopping")
         self.emit_status(force=True)
         return 'stopped'
 
@@ -125,10 +119,7 @@ class BinanceFeeder(BaseFeeder, QueueBatchMixin):
             self.last_msg_ts = ts_trade
         except Exception as ex:
             self.last_error = str(ex)
-            try:
-                emit_event("feeder", f"binance:{self.name}", "listener", "ERROR", "MSG_ERR", f"Message handling error: {ex}")
-            except Exception:
-                pass
+            emit_event("feeder", f"binance:{self.name}", "listener", "ERROR", "MSG_ERR", f"Message handling error: {ex}")
         finally:
             dur_ms = (time.time() - start) * 1000.0
             self._update_handler_timing(dur_ms)
@@ -152,10 +143,7 @@ class BinanceFeeder(BaseFeeder, QueueBatchMixin):
                 delay = 1
             except Exception as e:
                 self.last_error = str(e)
-                try:
-                    emit_event("feeder", f"binance:{self.name}", "listener", "ERROR", "WS_ERR", f"WebSocket run error: {e}", {"backoff_s": delay})
-                except Exception:
-                    pass
+                emit_event("feeder", f"binance:{self.name}", "listener", "ERROR", "WS_ERR", f"WebSocket run error: {e}", {"backoff_s": delay})
             finally:
                 self.ws = None
                 if not stop_event.is_set():
