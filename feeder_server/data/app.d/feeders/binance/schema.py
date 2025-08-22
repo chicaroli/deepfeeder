@@ -7,15 +7,11 @@ from feeders.bins import bins_recent
 # --- Unified Schema metadata (exported) ---
 BINANCE_OHLCV_TIME_COL = "Timestamp"
 BINANCE_OHLCV_SYMBOL_COL = "Symbol"
-BINANCE_OHLCV_SCHEMA_COLS = (
-    "Timestamp", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "Trades", "Vwap", "BuyerMakerCount"
-)
+BINANCE_OHLCV_SCHEMA_COLS = ("Timestamp", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "Trades", "Vwap", "BuyerMakerCount")
 BINANCE_OHLCV_FILLED_SCHEMA_COLS = BINANCE_OHLCV_SCHEMA_COLS + ("IsEmpty",)
 BINANCE_TRADES_TIME_COL = "Timestamp"
 BINANCE_TRADES_SYMBOL_COL = "Symbol"
-BINANCE_TRADES_SCHEMA_COLS = (
-    "Timestamp", "Symbol", "TradeId", "Price", "Quantity", "BuyerID", "SellerID", "IsBuyerMaker"
-)
+BINANCE_TRADES_SCHEMA_COLS = ("Timestamp", "Symbol", "TradeId", "Price", "Quantity", "BuyerID", "SellerID", "IsBuyerMaker")
 
 __all__ = [
     'binance_trades_writer', 'binance_trades_table',
@@ -75,7 +71,7 @@ def binance_trades_writer():
     return _BINANCE_TRADES_MIRROR
 
 def binance_trades_table():
-    return _BINANCE_TRADES_DTW.table
+    return _BINANCE_TRADES_MIRROR.table
 
 def binance_ohlcv_1m():
     t = _BINANCE_TRADES_DTW.table.update([

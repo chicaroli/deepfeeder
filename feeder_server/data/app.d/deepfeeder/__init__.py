@@ -102,7 +102,7 @@ __all__ = [
     # Helpers
     "tables", "get_fanout_stats_table",
     # Persistence bindings (lazy)
-    "start_journal", "stop_journal", "replay_binance", "replay_tv", "purge_hot_partitions",
+    "start_journal", "stop_journal", "replay", "purge_hot_partitions",
     # Namespaces
     "feeders", "ingest", "fanout", "ui",
     "runtime",
@@ -121,12 +121,8 @@ def stop_journal() -> str:
     return services.get("journal").stop()
 
 
-def replay_binance(symbol: str, t0_iso: str, t1_iso: str) -> str:
-    return services.get("journal").replay_binance(symbol, t0_iso, t1_iso)
-
-
-def replay_tv(symbol: str, t0_iso: str, t1_iso: str) -> str:
-    return services.get("journal").replay_tv(symbol, t0_iso, t1_iso)
+def replay(provider: str, symbol: str, t0_iso: str, t1_iso: str) -> str:
+    return services.get("journal").replay(provider, symbol, t0_iso, t1_iso)
 
 
 def purge_hot_partitions(keep_days: int = 14) -> int:

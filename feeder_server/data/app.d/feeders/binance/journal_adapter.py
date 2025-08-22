@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from persistence.paths import BINANCE_HOT_DIR
 from feeders.binance import binance_trades_writer, binance_trades_table
 from feeders.binance.schema import register_binance_trades_tap
+from runtime.eventlog import emit_event
 from deephaven.time import to_j_instant
 import pyarrow as pa
 
@@ -17,6 +18,20 @@ def _to_utc(x):
     if isinstance(x, datetime):
         return x.astimezone(timezone.utc) if x.tzinfo else x.replace(tzinfo=timezone.utc)
     s = str(x)
+    # Truncate fractional seconds to 6 digits for Python compatibility
+    if '.' in s:
+        pre, post = s.split('.', 1)
+        if '+' in post or 'Z' in post:
+            if '+' in post:
+                frac, rest = post.split('+', 1)
+                frac = frac[:6]
+                s = f"{pre}.{frac}+{rest}"
+            else:
+                frac, rest = post.split('Z', 1)
+                frac = frac[:6]
+                s = f"{pre}.{frac}Z"
+        else:
+            s = f"{pre}.{post[:6]}"
     if s.endswith('Z'):
         s = s.replace('Z', '+00:00')
     return datetime.fromisoformat(s).astimezone(timezone.utc)
@@ -156,3 +171,42 @@ def to_arrow_table(batch: List[Dict[str, Any]]) -> pa.Table:
         pa.array(col('IsBuyerMaker'), type=pa.bool_()),
     ]
     return pa.Table.from_arrays(arrays, schema=schema)
+
+# Provider-specific replay logic for binance
+def replay(symbol: str, t0_iso: str, t1_iso: str, iter_parquet_fn) -> str:
+    from datetime import datetime, timezone
+    t0 = datetime.fromisoformat(t0_iso.replace("Z", "+00:00")).astimezone(timezone.utc)
+    t1 = datetime.fromisoformat(t1_iso.replace("Z", "+00:00")).astimezone(timezone.utc)
+    writer = get_writer()
+    seen: set[Any] = set()
+    try:
+        seen = build_seen(symbol, t0, t1)
+    except Exception:
+        pass
+    n = 0
+    try:
+        for r in iter_parquet_fn(base_dir, symbol, t0, t1):
+            if not isinstance(r, dict):
+                continue
+            try:
+                key = make_key(r)
+            except Exception:
+                key = None
+            if key is not None and key in seen:
+                continue
+            try:
+                args = to_writer_args(r)
+                getattr(writer, "write_row_direct", writer.write_row)(*args)
+                if key is not None:
+                    seen.add(key)
+                n += 1
+            except Exception:
+                pass
+        emit_event("journal", name, "replay", "INFO", "REPLAY", f"[replay] binance {symbol} +{n}")
+        return f"[replay] binance {symbol} +{n}"
+    except Exception as exc:
+        try:
+            emit_event("journal", name, "replay", "ERROR", "REPLAY_ERR", f"Replay error: {exc}")
+        except Exception:
+            pass
+        return f"[replay] binance {symbol} ERROR: {exc}"

@@ -115,13 +115,15 @@ class _Sink:
         buf: List[Dict[str, Any]] = []
         last = datetime.now(timezone.utc)
         while not self._stop.is_set() and not getattr(stop_event, 'is_set', lambda: False)():
-            rec = None
-            try:
-                rec = self.q.popleft()
-            except Exception:
-                pass
-            if rec:
-                buf.append(rec)
+            drain_count = self.flush_rows - len(buf)
+            while drain_count > 0 and self.q:
+                try:
+                    rec = self.q.popleft()
+                    if rec:
+                        buf.append(rec)
+                except Exception:
+                    break
+                drain_count -= 1
             now = datetime.now(timezone.utc)
             if len(buf) >= self.flush_rows or (buf and (now - last).total_seconds() >= self.flush_secs):
                 self._flush(buf)
@@ -246,23 +248,35 @@ class JournalService:
         if self._started:
             return "[journal] already started"
         # Register adapter taps and start sinks
+        # Counter for records enqueued per provider
+        self._enq_counters = {a.name: 0 for a in self._adapters}
         for a in self._adapters:
             sink = self._sinks[a.name]
-            def _tap_factory(adapter, sink_):
+            def _tap_factory(adapter, sink_, provider_name):
                 def _tap(*row_args):
                     try:
                         rec = adapter.to_record(row_args)
                         if rec:
+                            before_len = len(sink_.q)
                             sink_.enqueue(rec)
-                    except Exception:
-                        pass
+                            after_len = len(sink_.q)
+                            self._enq_counters[provider_name] += 1
+                            # Print every 100 records
+                            if self._enq_counters[provider_name] % 100 == 0:
+                                print(f"[journal] tap: provider={provider_name} enqueued={self._enq_counters[provider_name]} qlen={after_len}")
+                            # Always print warning if dropped
+                            if after_len == sink_.q.maxlen and before_len == after_len:
+                                print(f"[journal][WARNING] queue full for provider={provider_name}, record dropped!")
+                    except Exception as exc:
+                        print(f"[journal][ERROR] tap exception: {exc}")
                 return _tap
             try:
-                a.register_tap(_tap_factory(a, sink))
+                a.register_tap(_tap_factory(a, sink, a.name))
             except Exception:
                 pass
             sink.start()
         self._started = True
+        print(f"[journal] started. Enqueue counters: {self._enq_counters}")
         return "[journal] started"
 
     def stop(self) -> str:
@@ -315,11 +329,26 @@ class JournalService:
             s = str(v)
             if not s:
                 return None
+            # Truncate fractional seconds to 6 digits for Python compatibility
+            if '.' in s:
+                pre, post = s.split('.', 1)
+                if '+' in post or 'Z' in post:
+                    if '+' in post:
+                        frac, rest = post.split('+', 1)
+                        frac = frac[:6]
+                        s = f"{pre}.{frac}+{rest}"
+                    else:
+                        frac, rest = post.split('Z', 1)
+                        frac = frac[:6]
+                        s = f"{pre}.{frac}Z"
+                else:
+                    s = f"{pre}.{post[:6]}"
             if s.endswith("Z"):
                 s = s.replace("Z", "+00:00")
             return datetime.fromisoformat(s).astimezone(timezone.utc)
         except Exception:
             return None
+        
     def _iter_parquet(self, base_dir: str, symbol: str, t0: datetime, t1: datetime):
         import os
         # iterate modern partitioned layout only
@@ -346,72 +375,12 @@ class JournalService:
                     pass
             cur = date.fromordinal(cur.toordinal() + 1)
 
-    def replay_binance(self, symbol: str, t0_iso: str, t1_iso: str) -> str:
-        from datetime import datetime, timezone
-        t0 = datetime.fromisoformat(t0_iso.replace("Z", "+00:00")).astimezone(timezone.utc)
-        t1 = datetime.fromisoformat(t1_iso.replace("Z", "+00:00")).astimezone(timezone.utc)
-        # find adapter by name
-        adapter = next((a for a in self._adapters if a.name == 'binance'), None)
-        if adapter is None:
-            return "[replay] binance adapter not available"
-        writer = adapter.get_writer()
-        # Build seen set from live table
-        seen: set[Any] = set()
-        try:
-            seen = adapter.build_seen(symbol, t0, t1)
-        except Exception:
-            pass
-        n = 0
-        for r in self._iter_parquet(adapter.base_dir, symbol, t0, t1):
-            if not isinstance(r, dict):
-                continue
-            try:
-                key = adapter.make_key(r)
-            except Exception:
-                key = None
-            if key is not None and key in seen:
-                continue
-            try:
-                # write without triggering taps
-                args = adapter.to_writer_args(r)
-                getattr(writer, "write_row_direct", writer.write_row)(*args)
-                if key is not None:
-                    seen.add(key)
-                n += 1
-            except Exception:
-                pass
-        return f"[replay] binance {symbol} +{n}"
 
-    def replay_tv(self, symbol: str, t0_iso: str, t1_iso: str) -> str:
-        from datetime import datetime, timezone
-        t0 = datetime.fromisoformat(t0_iso.replace("Z", "+00:00")).astimezone(timezone.utc)
-        t1 = datetime.fromisoformat(t1_iso.replace("Z", "+00:00")).astimezone(timezone.utc)
-        adapter = next((a for a in self._adapters if a.name == 'tv'), None)
+    def replay(self, provider: str, symbol: str, t0_iso: str, t1_iso: str) -> str:
+        """Delegate replay to provider's journal_adapter."""
+        adapter = next((a for a in self._adapters if a.name == provider), None)
         if adapter is None:
-            return "[replay] tv adapter not available"
-        writer = adapter.get_writer()
-        seen: set[Any] = set()
-        try:
-            seen = adapter.build_seen(symbol, t0, t1)
-        except Exception:
-            pass
-        n = 0
-        for r in self._iter_parquet(adapter.base_dir, symbol, t0, t1):
-            # Skip legacy JSON-row files (typed rows have these keys)
-            if not isinstance(r, dict) or "Symbol" not in r or "LpTime" not in r:
-                continue
-            try:
-                key = adapter.make_key(r)
-            except Exception:
-                key = None
-            if key is not None and key in seen:
-                continue
-            try:
-                args = adapter.to_writer_args(r)
-                getattr(writer, "write_row_direct", writer.write_row)(*args)
-                if key is not None:
-                    seen.add(key)
-                n += 1
-            except Exception:
-                pass
-        return f"[replay] tv {symbol} +{n}"
+            return f"[replay] {provider} adapter not available"
+        if not hasattr(adapter, "replay"):
+            return f"[replay] {provider} adapter missing replay()"
+        return adapter.replay(symbol, t0_iso, t1_iso, self._iter_parquet)

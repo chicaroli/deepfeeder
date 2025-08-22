@@ -3,8 +3,8 @@
 Provides a typed config with environment-driven defaults, mirroring feeder configs.
 
 Environment variables (all optional):
-  DEEPFEEDER_JOURNAL_FLUSH_ROWS            int   default 5000
-  DEEPFEEDER_JOURNAL_FLUSH_SECS            float default 2.0
+  DEEPFEEDER_JOURNAL_FLUSH_ROWS            int   default 10000
+  DEEPFEEDER_JOURNAL_FLUSH_SECS            float default 1.0
   DEEPFEEDER_JOURNAL_MAX_ROWS_PER_FILE     int   default unset/0 (ignored when <= 0)
   DEEPFEEDER_JOURNAL_MAX_ROWS_PER_GROUP    int   default unset/0 (ignored when <= 0)
   DEEPFEEDER_JOURNAL_COMPACT_ENABLED       0/1   default 1 (truthy unless 0/false)
@@ -57,16 +57,20 @@ class JournalConfig:
 def load_config() -> JournalConfig:
     """Load journal config from environment with defaults."""
     return JournalConfig(
-        flush_rows=int(os.getenv("DEEPFEEDER_JOURNAL_FLUSH_ROWS", "5000")),
-        flush_secs=float(os.getenv("DEEPFEEDER_JOURNAL_FLUSH_SECS", "5.0")),
+        # flush settings
+        flush_rows=int(os.getenv("DEEPFEEDER_JOURNAL_FLUSH_ROWS", "10000")),
+        flush_secs=float(os.getenv("DEEPFEEDER_JOURNAL_FLUSH_SECS", "1.0")),
+        log_flush_enabled=_get_bool("DEEPFEEDER_JOURNAL_LOG_FLUSH", "0"),
         max_rows_per_file=_get_int_opt("DEEPFEEDER_JOURNAL_MAX_ROWS_PER_FILE"),
         max_rows_per_group=_get_int_opt("DEEPFEEDER_JOURNAL_MAX_ROWS_PER_GROUP"),
+
+        # compaction settings
         compact_enabled=_get_bool("DEEPFEEDER_JOURNAL_COMPACT_ENABLED", "1"),
-        compact_interval_secs=float(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_INTERVAL_SECS", "180")),
-        compact_stable_secs=float(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_STABLE_SECS", "60")),
+        compact_interval_secs=float(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_INTERVAL_SECS", "30")),
+        compact_stable_secs=float(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_STABLE_SECS", "10")),
         compact_min_files=int(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_MIN_FILES", "8")),
         master_prefix=os.getenv("DEEPFEEDER_JOURNAL_MASTER_PREFIX", "master-"),
-        log_flush_enabled=_get_bool("DEEPFEEDER_JOURNAL_LOG_FLUSH", "0"),
+        
     )
 
 

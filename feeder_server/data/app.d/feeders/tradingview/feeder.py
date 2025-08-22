@@ -100,11 +100,7 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
                 for raw in self.symbols:
                     # Normalize TV symbols to use the instrument part for replay API (which filters by Symbol)
                     tick = raw.split(":", 1)[-1]
-                    try:
-                        msg = dfb.replay_tv(tick, t0, t1)
-                        emit_event("feeder", f"tradingview:{self.name}", "warm", "INFO", "REPLAY", msg)
-                    except Exception as _e:
-                        emit_event("feeder", f"tradingview:{self.name}", "warm", "ERROR", "REPLAY_ERR", str(_e))
+                    msg = dfb.replay("tv", tick, t0, t1)
         except Exception:
             pass
         self.start_writer(self.provider, self.name)

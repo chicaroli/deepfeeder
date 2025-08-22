@@ -61,11 +61,7 @@ class BinanceFeeder(BaseFeeder, QueueBatchMixin):
                 t1 = now.isoformat().replace("+00:00", "Z")
                 import deepfeeder as dfb  # lazy import to avoid circulars
                 for sym in self.symbols:
-                    try:
-                        msg = dfb.replay_binance(sym, t0, t1)
-                        emit_event("feeder", f"binance:{self.name}", "warm", "INFO", "REPLAY", msg)
-                    except Exception as _e:
-                        emit_event("feeder", f"binance:{self.name}", "warm", "ERROR", "REPLAY_ERR", str(_e))
+                    msg = dfb.replay("binance", sym, t0, t1)
         except Exception:
             pass
         self.start_writer(self.provider, self.name)
