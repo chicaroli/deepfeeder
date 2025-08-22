@@ -14,38 +14,20 @@ from datetime import datetime, timezone, date
 from typing import Any, Deque, Dict, List, Optional, Tuple
 from collections import deque
 import os
+import time
 
 import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 
 from persistence.paths import ensure_dirs
+from persistence.config import load_config, JournalConfig
 from persistence.adapters import discover_adapters
 
 from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
 
 # Provider adapters are discovered dynamically
-
-
-def _to_utc(dt_like: Any) -> datetime:
-    """Best-effort conversion of Deephaven Instant or datetime to UTC datetime."""
-    try:
-        # deephaven Instant supports isoformat; many ops pass python datetime
-        if isinstance(dt_like, datetime):
-            if dt_like.tzinfo is None:
-                return dt_like.replace(tzinfo=timezone.utc)
-            return dt_like.astimezone(timezone.utc)
-        # Fallback: leave as-is
-        s = str(dt_like)
-        if s.endswith("Z"):
-            s = s.replace("Z", "+00:00")
-        return datetime.fromisoformat(s)
-    except Exception:
-        return datetime.now(timezone.utc)
-
-
-def _ymd(d: datetime) -> str:
-    return d.date().isoformat()
 
 
 class _Sink:
@@ -56,13 +38,30 @@ class _Sink:
         self.q: Deque[Dict[str, Any]] = deque(maxlen=20000)
         self._stop = threading.Event()
         self._worker = None
-        self.flush_rows = int(os.getenv("DEEPFEEDER_JOURNAL_FLUSH_ROWS", "5000"))
-        self.flush_secs = float(os.getenv("DEEPFEEDER_JOURNAL_FLUSH_SECS", "2.0"))
+        # Load config once per sink
+        self._cfg = load_config()
+        self.flush_rows = self._cfg.flush_rows
+        self.flush_secs = self._cfg.flush_secs
+        self.max_rows_per_file = self._cfg.max_rows_per_file
+        self.max_rows_per_group = self._cfg.max_rows_per_group
+        # Unique sequence per sink to avoid filename collisions across flushes
+        self._file_seq = 0
+        # Compaction settings
+        self._compact_enabled = self._cfg.compact_enabled
+        self._compact_interval = self._cfg.compact_interval_secs
+        self._compact_stable_secs = self._cfg.compact_stable_secs
+        self._compact_min_files = self._cfg.compact_min_files
+        self._master_prefix = self._cfg.master_prefix
+        self._last_compact_ts = 0.0
 
     def start(self):
         if self._worker is not None:
             return
         self._worker = spawn("journal", self.name, "sink", self._run)
+        try:
+            emit_event("journal", self.name, "sink", "INFO", "SINK_START", f"sink started: base={self.base_dir}")
+        except Exception:
+            pass
 
     def stop(self):
         self._stop.set()
@@ -83,15 +82,29 @@ class _Sink:
         if not batch:
             return
         tbl = self._to_table(batch)
-        # Partition by dt/symbol
         try:
+            epoch_ms = int(time.time() * 1000)
+            self._file_seq += 1
+            basename = f"part-{self.name}-{epoch_ms}-{self._file_seq}-{{i}}.parquet"
             ds.write_dataset(
-                tbl,
+                data=tbl,
                 base_dir=self.base_dir,
                 format="parquet",
-                partitioning=["dt", "symbol"],
-                existing_data_behavior="overwrite_or_ignore",  # write new files
+                partitioning=ds.partitioning(
+                    pa.schema([("dt", pa.string()), ("symbol", pa.string())]),
+                    flavor="hive"
+                    ),
+                basename_template=basename,
+                existing_data_behavior="overwrite_or_ignore",
+                create_dir=True,
+                max_rows_per_file=self.max_rows_per_file or None,
+                max_rows_per_group=self.max_rows_per_group or None,
             )
+            if getattr(self._cfg, "log_flush_enabled", False):
+                try:
+                    emit_event("journal", self.name, "sink", "INFO", "FLUSH", f"wrote batches=1")
+                except Exception:
+                    pass
         except Exception as exc:
             try:
                 emit_event("journal", self.name, "sink", "ERROR", "PARQUET_WRITE", f"flush error: {exc!r}")
@@ -101,7 +114,6 @@ class _Sink:
     def _run(self, stop_event: Any):
         buf: List[Dict[str, Any]] = []
         last = datetime.now(timezone.utc)
-        import time
         while not self._stop.is_set() and not getattr(stop_event, 'is_set', lambda: False)():
             rec = None
             try:
@@ -116,8 +128,108 @@ class _Sink:
                 buf.clear()
                 last = now
             time.sleep(0.05)
+            if self._compact_enabled:
+                try:
+                    now_s = time.time()
+                    if (now_s - self._last_compact_ts) >= self._compact_interval:
+                        self._maybe_compact_today()
+                        self._last_compact_ts = now_s
+                except Exception:
+                    pass
         if buf:
             self._flush(buf)
+
+    def _today_dir(self) -> Optional[str]:
+        try:
+            today = date.today().isoformat()
+            p1 = os.path.join(self.base_dir, f"dt={today}")
+            if os.path.isdir(p1):
+                return p1
+        except Exception:
+            pass
+        return None
+
+    def _maybe_compact_today(self) -> None:
+        ddir = self._today_dir()
+        if not ddir:
+            return
+        try:
+            for entry in os.listdir(ddir):
+                # only consider modern symbol partitions: symbol=<name>
+                if not entry.startswith("symbol="):
+                    continue
+                spath = os.path.join(ddir, entry)
+                if not os.path.isdir(spath):
+                    continue
+                sym = entry.split("=", 1)[1].lower()
+                self._compact_symbol_dir(ddir, sym, spath)
+        except Exception:
+            pass
+
+    def _compact_symbol_dir(self, ddir: str, symbol: str, spath: str) -> None:
+        try:
+            files = [f for f in os.listdir(spath) if f.endswith('.parquet')]
+            if not files:
+                return
+            day_token = os.path.basename(ddir).split('=')[-1]
+            master_name = f"{self._master_prefix}{day_token}-{symbol}.parquet"
+            master_path = os.path.join(spath, master_name)
+            now_s = time.time()
+            parts = []
+            for f in files:
+                if f == os.path.basename(master_path):
+                    continue
+                fp = os.path.join(spath, f)
+                try:
+                    st = os.stat(fp)
+                    if (now_s - st.st_mtime) >= self._compact_stable_secs:
+                        parts.append(fp)
+                except Exception:
+                    continue
+            if len(parts) < 1:
+                return
+            if len(files) < self._compact_min_files and not os.path.exists(master_path):
+                return
+            inputs = []
+            if os.path.exists(master_path):
+                inputs.append(master_path)
+            inputs.extend(parts)
+            if not inputs:
+                return
+            tables = []
+            for fp in inputs:
+                try:
+                    tables.append(pq.read_table(fp))
+                except Exception:
+                    pass
+            if not tables:
+                return
+            try:
+                merged = pa.concat_tables(tables, promote_options="default")  # type: ignore[arg-type]
+            except TypeError:
+                merged = pa.concat_tables(tables, promote=True)
+            tmp_path = os.path.join(spath, f".__tmp__{os.getpid()}_{int(now_s)}.parquet")
+            pq.write_table(merged, tmp_path)
+            try:
+                if os.path.exists(master_path):
+                    os.remove(master_path)
+            except Exception:
+                pass
+            os.replace(tmp_path, master_path)
+            for fp in parts:
+                try:
+                    os.remove(fp)
+                except Exception:
+                    pass
+            try:
+                emit_event("journal", self.name, "compact", "INFO", "COMPACT_DONE", f"{symbol} -> {master_name}", {"files": len(inputs), "rows": int(merged.num_rows)})
+            except Exception:
+                pass
+        except Exception as exc:
+            try:
+                emit_event("journal", self.name, "compact", "ERROR", "COMPACT_ERR", str(exc))
+            except Exception:
+                pass
 
 
 class JournalService:
@@ -195,21 +307,40 @@ class JournalService:
         return removed
 
     # --- replay helpers ---
+    def _row_ts(self, r: Dict[str, Any]) -> Optional[datetime]:
+        v = r.get("ts") or r.get("Timestamp") or r.get("LpTime")
+        if isinstance(v, datetime):
+            return v.astimezone(timezone.utc) if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        try:
+            s = str(v)
+            if not s:
+                return None
+            if s.endswith("Z"):
+                s = s.replace("Z", "+00:00")
+            return datetime.fromisoformat(s).astimezone(timezone.utc)
+        except Exception:
+            return None
     def _iter_parquet(self, base_dir: str, symbol: str, t0: datetime, t1: datetime):
         import os
-        # iterate date partitions
+        # iterate modern partitioned layout only
         cur = t0.date()
         while cur <= t1.date():
             part = os.path.join(base_dir, f"dt={cur.isoformat()}", f"symbol={symbol.lower()}")
             if os.path.isdir(part):
                 try:
                     dataset = ds.dataset(part, format="parquet")
-                    # pushdown filter on ts
-                    filt = (ds.field("ts") >= pa.scalar(t0, type=pa.timestamp("us", tz="UTC"))) & (ds.field("ts") < pa.scalar(t1, type=pa.timestamp("us", tz="UTC")))
-                    for frag in dataset.get_fragments(filt):
+                    schema = dataset.schema
+                    have_ts = any(f.name == "ts" for f in schema)
+                    fragments = dataset.get_fragments() if not have_ts else dataset.get_fragments(
+                        (ds.field("ts") >= pa.scalar(t0, type=pa.timestamp("us", tz="UTC"))) & (ds.field("ts") < pa.scalar(t1, type=pa.timestamp("us", tz="UTC")))
+                    )
+                    for frag in fragments:
                         scanner = ds.Scanner.from_fragment(frag)
                         tbl = scanner.to_table()
                         for r in tbl.to_pylist():
+                            ts = self._row_ts(r)
+                            if ts is None or ts < t0 or ts >= t1:
+                                continue
                             yield r
                 except Exception:
                     pass
@@ -232,8 +363,7 @@ class JournalService:
             pass
         n = 0
         for r in self._iter_parquet(adapter.base_dir, symbol, t0, t1):
-            # Skip legacy JSON-row files (typed rows have these keys)
-            if not isinstance(r, dict) or "Symbol" not in r or "TradeID" not in r:
+            if not isinstance(r, dict):
                 continue
             try:
                 key = adapter.make_key(r)

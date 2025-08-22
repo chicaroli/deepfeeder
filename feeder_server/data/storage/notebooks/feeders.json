@@ -26,6 +26,6 @@
     "symbols": [
       "BMFBOVESPA:DI1Z2025", "BMFBOVESPA:DI1N2026"
     ],
-    "autostart": true
+    "autostart": false
   }  
 ]

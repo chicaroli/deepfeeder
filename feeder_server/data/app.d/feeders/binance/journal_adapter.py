@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from persistence.paths import BINANCE_HOT_DIR
 from feeders.binance import binance_trades_writer, binance_trades_table
 from feeders.binance.schema import register_binance_trades_tap
+from deephaven.time import to_j_instant
 import pyarrow as pa
 
 name = 'binance'
@@ -44,10 +45,23 @@ def to_record(args: tuple) -> Dict[str, Any]:
 
 
 def to_writer_args(r: Dict[str, Any]) -> tuple:
+    """Map a persisted record back to writer args, converting times to Instant."""
+    trade_id = r.get('TradeID') if 'TradeID' in r else r.get('TradeId')
+    # Convert datetime/iso strings to Deephaven Instant
+    et = r.get('EventTime')
+    ts = r.get('Timestamp')
+    try:
+        et_i = to_j_instant(_to_utc(et)) if et is not None else None
+    except Exception:
+        et_i = None
+    try:
+        ts_i = to_j_instant(_to_utc(ts)) if ts is not None else None
+    except Exception:
+        ts_i = None
     return (
-        r.get('EventType'), r.get('EventTime'), r.get('Symbol'), r.get('TradeID'),
+        r.get('EventType'), et_i, r.get('Symbol'), trade_id,
         r.get('Price'), r.get('Quantity'), r.get('BuyerID'), r.get('SellerID'),
-        r.get('Timestamp'), r.get('IsBuyerMaker'),
+        ts_i, r.get('IsBuyerMaker'),
     )
 
 
@@ -79,7 +93,11 @@ def build_seen(symbol: str, t0: datetime, t1: datetime):
 def make_key(record: Dict[str, Any]) -> Tuple[str, Optional[int]]:
     """Hashable dedupe key: (symbol.lower(), TradeID or None)."""
     try:
-        return (str(record.get('Symbol', '')).lower(), int(record.get('TradeID')) if record.get('TradeID') is not None else None)
+        sym = record.get('Symbol')
+        if sym is None:
+            sym = record.get('symbol')
+        tid = record.get('TradeID') if 'TradeID' in record else record.get('TradeId')
+        return (str(sym or '').lower(), int(tid) if tid is not None else None)
     except Exception:
         return (str(record.get('symbol', '')).lower(), None)
 

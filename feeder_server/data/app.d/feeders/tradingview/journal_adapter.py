@@ -7,6 +7,7 @@ import hashlib
 from persistence.paths import TV_HOT_DIR
 from feeders.tradingview import tv_quotes_writer, tv_quotes_table
 from feeders.tradingview.schema import register_tv_quotes_tap
+from deephaven.time import to_j_instant
 import pyarrow as pa
 
 name = 'tv'
@@ -43,9 +44,23 @@ def to_record(args: tuple) -> Dict[str, Any]:
 
 
 def to_writer_args(r: Dict[str, Any]) -> tuple:
+    """Map a persisted record back to writer args, converting LpTime to Instant."""
+    lpt = r.get('LpTime') or r.get('lptime')
+    try:
+        lpt_i = to_j_instant(_to_utc(lpt)) if lpt is not None else None
+    except Exception:
+        lpt_i = None
     return (
-        r.get('Exchange'), r.get('Symbol'), r.get('LpTime'), r.get('LastPrice'),
-        r.get('Bid'), r.get('Ask'), r.get('Volume'), r.get('Change'), r.get('ChangePct'), r.get('VolDelta'),
+        r.get('Exchange') or r.get('exchange'),
+        r.get('Symbol') or r.get('symbol'),
+        lpt_i,
+        r.get('LastPrice') or r.get('lastprice'),
+        r.get('Bid') or r.get('bid'),
+        r.get('Ask') or r.get('ask'),
+        r.get('Volume') or r.get('volume'),
+        r.get('Change') or r.get('change'),
+        r.get('ChangePct') or r.get('changepct'),
+        r.get('VolDelta') or r.get('voldelta'),
     )
 
 
@@ -76,9 +91,12 @@ def build_seen(symbol: str, t0: datetime, t1: datetime):
 
 def make_key(record: Dict[str, Any]) -> str:
     key_raw = (
-        str(record.get('Symbol', '')).lower(),
-        str(record.get('LpTime')),
-        record.get('Bid'), record.get('Ask'), record.get('LastPrice'), record.get('Volume'),
+        str((record.get('Symbol') or record.get('symbol') or '')).lower(),
+        str(record.get('LpTime') or record.get('lptime')),
+        record.get('Bid') or record.get('bid'),
+        record.get('Ask') or record.get('ask'),
+        record.get('LastPrice') or record.get('lastprice'),
+        record.get('Volume') or record.get('volume'),
     )
     return hashlib.md5('|'.join(map(str, key_raw)).encode('utf-8')).hexdigest()
 

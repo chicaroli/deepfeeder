@@ -2,7 +2,8 @@
 from __future__ import annotations
 import json, time, collections
 from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import os
 from threading import Lock as _Lock
 
 import websocket
@@ -88,6 +89,24 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
             return "already running"
         self.started_at = time.time()
         self.last_error = None
+        # Optional warm replay before opening WS (config-gated)
+        try:
+            if self._cfg.warm_replay_on_start:
+                secs = int(self._cfg.warm_replay_window_secs)
+                now = datetime.now(timezone.utc)
+                t0 = (now - timedelta(seconds=secs)).isoformat().replace("+00:00", "Z")
+                t1 = now.isoformat().replace("+00:00", "Z")
+                import deepfeeder as dfb  # lazy import to avoid circulars
+                for raw in self.symbols:
+                    # Normalize TV symbols to use the instrument part for replay API (which filters by Symbol)
+                    tick = raw.split(":", 1)[-1]
+                    try:
+                        msg = dfb.replay_tv(tick, t0, t1)
+                        emit_event("feeder", f"tradingview:{self.name}", "warm", "INFO", "REPLAY", msg)
+                    except Exception as _e:
+                        emit_event("feeder", f"tradingview:{self.name}", "warm", "ERROR", "REPLAY_ERR", str(_e))
+        except Exception:
+            pass
         self.start_writer(self.provider, self.name)
         self.listener_worker = spawn("feeder", f"{self.provider}:{self.name}", "listener", self._run)
         try:

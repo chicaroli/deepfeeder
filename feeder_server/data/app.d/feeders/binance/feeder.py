@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List
 from threading import Event
 import json, websocket, time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from deephaven.time import to_j_instant
 
@@ -52,6 +52,22 @@ class BinanceFeeder(BaseFeeder, QueueBatchMixin):
             return 'already running'
         self.started_at = time.time()
         self.last_error = None
+        # Optional warm replay before opening WS (env-gated)
+        try:
+            if self._cfg.warm_replay_on_start:
+                secs = int(self._cfg.warm_replay_window_secs)
+                now = datetime.now(timezone.utc)
+                t0 = (now - timedelta(seconds=secs)).isoformat().replace("+00:00", "Z")
+                t1 = now.isoformat().replace("+00:00", "Z")
+                import deepfeeder as dfb  # lazy import to avoid circulars
+                for sym in self.symbols:
+                    try:
+                        msg = dfb.replay_binance(sym, t0, t1)
+                        emit_event("feeder", f"binance:{self.name}", "warm", "INFO", "REPLAY", msg)
+                    except Exception as _e:
+                        emit_event("feeder", f"binance:{self.name}", "warm", "ERROR", "REPLAY_ERR", str(_e))
+        except Exception:
+            pass
         self.start_writer(self.provider, self.name)
         self.listener_worker = spawn("feeder", f"{self.provider}:{self.name}", "listener", self._run)
         try:

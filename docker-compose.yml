@@ -19,6 +19,8 @@ services:
         -Ddeephaven.application.enabled=true
       DEEPFEEDER_REGISTER_UI: "${DEEPFEEDER_REGISTER_UI:-1}"
       DEEPFEEDER_AUTOSTART: "${DEEPFEEDER_AUTOSTART:-1}"
+      DEEPFEEDER_REPLAY_ON_START: "${DEEPFEEDER_REPLAY_ON_START:-1}"
+      DEEPFEEDER_REPLAY_WINDOW_SECS: "${DEEPFEEDER_REPLAY_WINDOW_SECS:-900}"
     volumes:
       - ./feeder_server/data:/data
     restart: unless-stopped
