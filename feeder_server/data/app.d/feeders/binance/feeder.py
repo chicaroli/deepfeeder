@@ -9,6 +9,7 @@ from deephaven.time import to_j_instant
 
 from feeders.base import BaseFeeder
 from feeders.common.queue_batch import QueueBatchMixin
+from feeders.binance.backfill import BinanceGapFiller
 from runtime.eventlog import emit_event
 from runtime.dh_thread import spawn
 from .schema import binance_trades_writer
@@ -42,6 +43,8 @@ class BinanceFeeder(BaseFeeder, QueueBatchMixin):
         self._cfg = cfg
         QueueBatchMixin.__init__(self, queue_maxlen=10000)
         self._writer = self._trades_writer
+        # Multiple GapFiller workers
+        self.gap_fillers = []
 
     def is_alive(self) -> bool:
         return self.listener_worker is not None and self.listener_worker.is_alive()
@@ -52,6 +55,7 @@ class BinanceFeeder(BaseFeeder, QueueBatchMixin):
             return 'already running'
         self.started_at = time.time()
         self.last_error = None
+
         # Optional warm replay before opening WS (env-gated)
         try:
             if self._cfg.warm_replay_on_start:
@@ -62,12 +66,26 @@ class BinanceFeeder(BaseFeeder, QueueBatchMixin):
                 import deepfeeder as dfb  # lazy import to avoid circulars
                 for sym in self.symbols:
                     msg = dfb.replay("binance", sym, t0, t1)
-        except Exception:
-            pass
+        except Exception as exc:
+            emit_event("journal", f"{self.provider}:{self.name}", "replay", "ERROR", "REPLAY_ERR", f"Replay error: {exc}")
+
+        # Start listener worker
         self.start_writer(self.provider, self.name)
         self.listener_worker = spawn("feeder", f"{self.provider}:{self.name}", "listener", self._run)
         emit_event("feeder", f"binance:{self.name}", "listener", "INFO", "START", "Feeder starting", {"symbols": self.symbols})
         self.emit_status(force=True)
+        
+        # Start GapFillers for all symbols
+        self.gap_fillers = []
+        for symbol in self.symbols:
+            gap_filler = BinanceGapFiller(symbol=symbol)
+            gap_filler.start(
+                scan_interval=int(getattr(self._cfg, 'gap_scan_interval', 60)),
+                api_key=getattr(self._cfg, 'binance_api_key', None),
+                dh_table=self._trades_writer.table,
+            )
+            self.gap_fillers.append(gap_filler)
+
         return 'started'
 
     def stop(self):
@@ -86,6 +104,14 @@ class BinanceFeeder(BaseFeeder, QueueBatchMixin):
             pass
         if self.is_alive() and self.listener_worker is not None:
             self.listener_worker.join(timeout=3)
+        
+        # Stop all gap fillers if running
+        try:
+            for gap_filler in self.gap_fillers:
+                gap_filler.stop(timeout=3)
+        except Exception:
+            pass
+
         emit_event("feeder", f"binance:{self.name}", "listener", "INFO", "STOP", "Feeder stopping")
         self.emit_status(force=True)
         return 'stopped'

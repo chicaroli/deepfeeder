@@ -37,22 +37,28 @@ _BINANCE_TRADES_DTW = DynamicTableWriter({
 _BINANCE_TAPS = []  # list[callable]
 
 
+
+import threading
+
 class _MirroredWriter:
     def __init__(self, dtw: DynamicTableWriter):
         self._dtw = dtw
+        self._lock = threading.Lock()
 
     def write_row(self, *args):
-        self._dtw.write_row(*args)
-        # best-effort taps; copy to avoid mutation during iteration
-        for fn in list(_BINANCE_TAPS):
-            try:
-                fn(*args)
-            except Exception:
-                pass
+        with self._lock:
+            self._dtw.write_row(*args)
+            # best-effort taps; copy to avoid mutation during iteration
+            for fn in list(_BINANCE_TAPS):
+                try:
+                    fn(*args)
+                except Exception:
+                    pass
 
     # Bypass taps (used by replay)
     def write_row_direct(self, *args):
-        self._dtw.write_row(*args)
+        with self._lock:
+            self._dtw.write_row(*args)
 
     @property
     def table(self):

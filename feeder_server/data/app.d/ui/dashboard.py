@@ -61,7 +61,7 @@ FeederDashboard = ui.dashboard(
                 ui.panel(ui.table(dfb.get_threads_table()), title="Threads / Services (live)"),
                 active_item_index=0,
             ),
-            height=20,
+            height=25,
         ),
         ui.stack(
             ui.panel(ui.table(dfb.get_binance_trades_table()), title="Binance Trades"),
@@ -74,7 +74,7 @@ FeederDashboard = ui.dashboard(
                 title="Event Log",
             ),
             active_item_index=0,
-            height=80,
+            height=75,
         ),
     ),
 )

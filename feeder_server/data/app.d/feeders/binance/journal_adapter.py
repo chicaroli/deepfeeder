@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from persistence.paths import BINANCE_HOT_DIR
-from feeders.binance import binance_trades_writer, binance_trades_table
-from feeders.binance.schema import register_binance_trades_tap
+from feeders.binance.schema import (
+    binance_trades_writer,
+    binance_trades_table,
+    register_binance_trades_tap,
+)
 from runtime.eventlog import emit_event
 from deephaven.time import to_j_instant
 import pyarrow as pa
+from typing import Iterable
 
 name = 'binance'
 base_dir = BINANCE_HOT_DIR
@@ -172,6 +176,103 @@ def to_arrow_table(batch: List[Dict[str, Any]]) -> pa.Table:
     ]
     return pa.Table.from_arrays(arrays, schema=schema)
 
+
+def _ms_to_dt(ms: Optional[int]) -> Optional[datetime]:
+    if ms is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000.0, tz=timezone.utc)
+    except Exception:
+        return None
+
+
+def rest_row_to_record(symbol: str, r: Dict[str, Any]) -> Dict[str, Any]:
+    """Map a single Binance REST trade JSON row to the journal record dict expected by the writer.
+
+    Expected input fields (historicalTrades):
+      - id (int)
+      - price (str|float)
+      - qty (str|float)
+      - time (int ms)
+      - buyerOrderId, sellerOrderId (ints)
+      - isBuyerMaker (bool)
+    """
+    ts_dt = _ms_to_dt(r.get('time') or r.get('T') or r.get('timestamp'))
+    trade_id = r.get('id') or r.get('a') or r.get('tradeId')
+    try:
+        trade_id = int(trade_id) if trade_id is not None else None
+    except Exception:
+        trade_id = None
+
+    def ffloat(x):
+        try:
+            return float(x) if x is not None else None
+        except Exception:
+            return None
+
+    return {
+        'EventType': 'trade',
+        'EventTime': ts_dt,
+        'Symbol': symbol.upper(),
+        'TradeID': trade_id,
+        'Price': ffloat(r.get('price') or r.get('p')),
+        'Quantity': ffloat(r.get('qty') or r.get('q')),
+        'BuyerID': int(r.get('buyerOrderId')) if r.get('buyerOrderId') is not None else None,
+        'SellerID': int(r.get('sellerOrderId')) if r.get('sellerOrderId') is not None else None,
+        'Timestamp': ts_dt,
+        'IsBuyerMaker': bool(r.get('isBuyerMaker')) if 'isBuyerMaker' in r else None,
+    }
+
+
+def ingest_rest_rows(rows: Iterable[Dict[str, Any]], symbol: str, writer=None, batch_size: int = 500) -> Tuple[int, int]:
+    """Map REST rows and write them using the existing writer.
+
+    Returns (written_count, failed_count).
+    """
+    writer = writer or get_writer()
+    written = 0
+    failed = 0
+
+    # First map rows to internal records so we can compute a timestamp window for dedupe
+    records: List[Dict[str, Any]] = []
+    for r in rows:
+        try:
+            records.append(rest_row_to_record(symbol, r))
+        except Exception:
+            # skip malformed rows
+            continue
+
+    # Build timestamp window for dedupe query (if timestamps present)
+    timestamps = [rec['Timestamp'] for rec in records if rec.get('Timestamp') is not None]
+    if timestamps:
+        t0 = min(timestamps) - timedelta(seconds=1)
+        t1 = max(timestamps) + timedelta(seconds=1)
+        try:
+            seen = build_seen(symbol, t0, t1)
+        except Exception:
+            seen = set()
+    else:
+        seen = set()
+
+    # Write records skipping keys already seen
+    for rec in records:
+        try:
+            key = make_key(rec)
+            if key in seen:
+                continue
+            args = to_writer_args(rec)
+            # Use normal writer so taps run
+            writer.write_row(*args)
+            written += 1
+            # mark as seen to avoid duplicates in same batch
+            seen.add(key)
+            # no id watermarking here; gap detection + dedupe handle duplicates
+        except Exception as ex:
+            failed += 1
+            emit_event('feeder', 'binance', 'backfill', 'ERROR', 'WRITE_ERR', f'Write error: {ex}', {'error': str(ex)})
+
+    return written, failed
+
 # Partitioning schema for Binance: dt, symbol
 partition_schema = pa.schema([
     ("dt", pa.string()),
@@ -179,7 +280,7 @@ partition_schema = pa.schema([
 ])
 
 # Provider-specific replay logic for binance
-def replay(symbol: str, t0_iso: str, t1_iso: str, iter_parquet_fn) -> str:
+def replay(symbol: str, t0_iso: str, t1_iso: str, iter_parquet_fn, **kwargs) -> str:
     from datetime import datetime, timezone
     t0 = datetime.fromisoformat(t0_iso.replace("Z", "+00:00")).astimezone(timezone.utc)
     t1 = datetime.fromisoformat(t1_iso.replace("Z", "+00:00")).astimezone(timezone.utc)

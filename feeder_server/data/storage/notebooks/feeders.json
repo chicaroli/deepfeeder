@@ -18,7 +18,7 @@
       "BMFBOVESPA:INDV2025", "BMFBOVESPA:WINV2025",
       "BMFBOVESPA:DOLU2025", "BMFBOVESPA:WDOV2025"
     ],
-    "autostart": true
+    "autostart": false
   },
  {
     "provider": "tradingview",
@@ -26,6 +26,6 @@
     "symbols": [
       "BMFBOVESPA:DI1Z2025", "BMFBOVESPA:DI1N2026"
     ],
-    "autostart": true
+    "autostart": false
   }  
 ]
