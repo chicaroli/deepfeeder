@@ -35,6 +35,18 @@ _TV_QUOTES_DTW = DynamicTableWriter({
     'VolDelta': dht.double,
 })
 
+_TV_BARS_DTW = DynamicTableWriter({
+    'Exchange': dht.string,
+    'Symbol': dht.string,
+    'Timestamp': dht.Instant,
+    'Open': dht.double,
+    'High': dht.double,
+    'Low': dht.double,
+    'Close': dht.double,
+    'Volume': dht.double,
+})
+
+
 # --- mirrored writer with taps ---------------------------------------------
 _TV_TAPS = []
 
@@ -74,6 +86,14 @@ def tv_quotes_writer():
 def tv_quotes_table():
     return _TV_QUOTES_DTW.table
 
+# TV bars writer and table accessors
+def tv_bars_writer():
+    return _TV_BARS_DTW
+
+def tv_bars_table():
+    return _TV_BARS_DTW.table
+
+# TV OHLCV from quotes
 @lru_cache(maxsize=1)
 def tv_ohlcv_1m_from_quotes():
     t = _TV_QUOTES_DTW.table.update([

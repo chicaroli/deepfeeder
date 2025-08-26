@@ -13,8 +13,9 @@ from feeders.base import BaseFeeder
 from feeders.common.queue_batch import QueueBatchMixin
 from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
-from .schema import tv_quotes_writer
+from .schema import tv_quotes_writer, tv_bars_writer
 from .config import load_config
+from .backfill import TradingViewGapFiller
 
 WS_URL = "wss://data.tradingview.com/socket.io/websocket"
 
@@ -67,6 +68,7 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
         self.writer_worker = None
         self.ws = None
         self._writer = tv_quotes_writer()
+        self._bars_writer = tv_bars_writer()
         cfg = load_config()
         self._cfg = cfg
         QueueBatchMixin.__init__(self, queue_maxlen=5000)
@@ -79,6 +81,8 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
         self._state: Dict[str, _SymState] = {k: _SymState() for k in self._sym_meta.keys()}
         self._last_fingerprint: Dict[str, tuple] = {}
         self._sid = f"qs_{int(time.time() * 1000)}"
+        # GapFillers for each symbol
+        self.gap_fillers = []
 
     def is_alive(self) -> bool:
         return self.listener_worker is not None and self.listener_worker.is_alive()
@@ -107,10 +111,25 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
                     msg = dfb.replay("tv", tick, t0, t1, exchange=exchange)
         except Exception:
             pass
+        
+        # Start listener worker
         self.start_writer(self.provider, self.name)
         self.listener_worker = spawn("feeder", f"{self.provider}:{self.name}", "listener", self._run)
         emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "START", "Feeder starting", {"symbols": self.symbols})
         self.emit_status(force=True)
+        
+        # Start GapFiller for all symbols
+        self.gap_fillers = []
+        for raw in self.symbols:
+            parts = raw.split(":", 1)
+            if len(parts) == 2:
+                exchange, tick = parts
+            else:
+                exchange, tick = None, raw
+            gap_filler = TradingViewGapFiller(symbol=tick, exchange=exchange)
+            gap_filler.start(dh_table=self._bars_writer.table)
+            self.gap_fillers.append(gap_filler)
+
         return "started"
 
     def stop(self):

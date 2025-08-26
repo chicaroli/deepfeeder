@@ -1,35 +1,63 @@
-import os
-import time
-import pandas as pd
-from threading import Lock
 
+import time
+from threading import Lock
+from typing import Optional
+
+import pandas as pd
 from tvDatafeed import TvDatafeed, Interval
 
+__all__ = ["get_tv_datafeed", "fetch_tv_data"]
 
-tv_lock = Lock()
+_tv_lock = Lock()
 
-
-def get_tv_datafeed(username: str | None = None, password: str | None = None) -> TvDatafeed:
+def get_tv_datafeed(username: Optional[str] = None, password: Optional[str] = None) -> TvDatafeed:
+    """
+    Create a TvDatafeed client for TradingView.
+    Args:
+        username: TradingView username (optional).
+        password: TradingView password (optional).
+    Returns:
+        TvDatafeed client instance.
+    """
     if username and password:
         return TvDatafeed(username=username, password=password)
     return TvDatafeed()
 
-
-def fetch_tv(symbol: str, exchange: str, interval: Interval, n_bars: int = 5000, retries: int = 5, delay: float = 5.0):
+def fetch_tv_data(
+    symbol: str,
+    exchange: str,
+    interval: Interval,
+    n_bars: int = 5000,
+    retries: int = 5,
+    delay: float = 5.0,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+) -> pd.DataFrame:
     """
-    A rate-limited wrapper for TradingView data fetch with retry on 429 errors.
+    Fetch historical data from TradingView with retry and rate-limit handling.
+    Args:
+        symbol: Trading symbol.
+        exchange: Exchange name.
+        interval: Data interval (tvDatafeed.Interval).
+        n_bars: Number of bars to fetch.
+        retries: Number of retry attempts on rate limit.
+        delay: Delay between retries (seconds).
+        username: TradingView username (optional).
+        password: TradingView password (optional).
+    Returns:
+        DataFrame with columns: symbol, datetime, open, high, low, close, volume.
     """
     for attempt in range(1, retries + 1):
-        with tv_lock:
+        with _tv_lock:
             try:
-                tv = get_tv_datafeed()
+                tv = get_tv_datafeed(username, password)
                 df = tv.get_hist(symbol, exchange, interval=interval, n_bars=n_bars)
             except Exception as e:
                 if "429" in str(e):
-                    print(f"[{symbol}] ⚠️ Rate limited (429). Retry {attempt}/{retries}...")
+                    print(f"[{symbol}] Rate limited (429). Retry {attempt}/{retries}...")
                     time.sleep(delay * attempt)
                     continue
-                print(f"[{symbol}] ❌ Failed with: {e}")
+                print(f"[{symbol}] Failed with: {e}")
                 return pd.DataFrame()
 
         if df is None or df.empty:
@@ -43,8 +71,11 @@ def fetch_tv(symbol: str, exchange: str, interval: Interval, n_bars: int = 5000,
         else:
             df["datetime"] = df["datetime"].dt.tz_localize("America/Sao_Paulo").dt.tz_convert("UTC").dt.tz_localize(None)
 
+        # Always set symbol and exchange columns from parameters for consistency
         df["symbol"] = symbol
-        return df[["symbol", "datetime", "open", "high", "low", "close", "volume"]]
+        df["exchange"] = exchange
 
-    print(f"[{symbol}] ❌ Failed after {retries} retries.")
+        return df[["exchange", "symbol", "datetime", "open", "high", "low", "close", "volume"]]
+
+    print(f"[{symbol}] Failed after {retries} retries.")
     return pd.DataFrame()

@@ -19,6 +19,7 @@ from feeders.binance import (
 )
 from feeders.tradingview import (
     tv_quotes_table as get_tv_quotes_table,
+    tv_bars_table as get_tv_bars_table,
     tv_ohlcv_1m_from_quotes as get_tv_ohlcv_1m_table,
     tv_ohlcv_5m_from_quotes as get_tv_ohlcv_5m_table,
     tv_ohlcv_1m_filled as get_tv_ohlcv_1m_filled_table,
@@ -78,6 +79,7 @@ def tables() -> Dict[str, Table]:
         "binance_ohlcv_5m": get_binance_ohlcv_5m_table(),
         "binance_ohlcv_5m_filled": get_binance_ohlcv_5m_filled_table(),
         "tv_quotes": get_tv_quotes_table(),
+        "tv_bars": get_tv_bars_table(),
         "tv_ohlcv_1m": get_tv_ohlcv_1m_table(),
         "tv_ohlcv_1m_filled": get_tv_ohlcv_1m_filled_table(),
         "tv_ohlcv_5m": get_tv_ohlcv_5m_table(),
@@ -97,7 +99,8 @@ __all__ = [
     "get_status_table", "get_configs_table", "get_threads_table",
     "get_binance_trades_table", "get_binance_ohlcv_1m_table", "get_binance_ohlcv_1m_filled_table",
     "get_binance_ohlcv_5m_table", "get_binance_ohlcv_5m_filled_table",
-    "get_tv_quotes_table", "get_tv_ohlcv_1m_table", "get_tv_ohlcv_1m_filled_table",
+    "get_tv_quotes_table", "get_tv_bars_table",
+    "get_tv_ohlcv_1m_table", "get_tv_ohlcv_1m_filled_table",
     "get_tv_ohlcv_5m_table", "get_tv_ohlcv_5m_filled_table",
     # Helpers
     "tables", "get_fanout_stats_table",

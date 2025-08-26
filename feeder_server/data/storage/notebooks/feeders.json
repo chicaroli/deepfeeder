@@ -3,13 +3,13 @@
     "provider": "binance",
     "name": "main",
     "symbols": ["btcusdt"],
-    "autostart": true
+    "autostart": false
   },
   {
     "provider": "binance",
     "name": "other",
     "symbols": ["ethusdt", "ltcusdt", "solusdt", "maticusdt", "avaxusdt"],
-    "autostart": true
+    "autostart": false
   },
   {
     "provider": "tradingview",
@@ -26,6 +26,6 @@
     "symbols": [
       "BMFBOVESPA:DI1Z2025", "BMFBOVESPA:DI1N2026"
     ],
-    "autostart": false
+    "autostart": true
   }  
 ]
