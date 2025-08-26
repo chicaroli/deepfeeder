@@ -2,19 +2,17 @@
 from deephaven import DynamicTableWriter, agg
 import deephaven.dtypes as dht
 from feeders.bins import bins_recent
+from functools import lru_cache
 
 # --- Schema metadata (exported) ---
 TV_QUOTES_TIME_COL = "LpTime"
 TV_QUOTES_SYMBOL_COL = "Symbol"
-TV_QUOTES_SCHEMA_COLS = (
-    "LpTime", "Symbol", "LastPrice", "Bid", "Ask", "Volume", "Change", "ChangePct", "VolDelta"
-)
+TV_QUOTES_SCHEMA_COLS = ("LpTime", "Symbol", "LastPrice", "Bid", "Ask", "Volume", "Change", "ChangePct", "VolDelta")
+
+# Unified OHLCV schema (common to all minute aggregations)
 TV_OHLCV_TIME_COL = "Timestamp"
 TV_OHLCV_SYMBOL_COL = "Symbol"
-# Unified OHLCV schema (common to all minute aggregations)
-TV_OHLCV_SCHEMA_COLS = (
-    "Timestamp", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "Vwap"
-)
+TV_OHLCV_SCHEMA_COLS = ("Timestamp", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "Vwap")
 TV_OHLCV_FILLED_SCHEMA_COLS = TV_OHLCV_SCHEMA_COLS + ("IsEmpty",)
 
 __all__ = [
@@ -68,12 +66,15 @@ def register_tv_quotes_tap(fn):
     _TV_TAPS.append(fn)
 
 
+@lru_cache(maxsize=1)
 def tv_quotes_writer():
     return _TV_QUOTES_MIRROR
 
+@lru_cache(maxsize=1)
 def tv_quotes_table():
     return _TV_QUOTES_DTW.table
 
+@lru_cache(maxsize=1)
 def tv_ohlcv_1m_from_quotes():
     t = _TV_QUOTES_DTW.table.update([
         'Timestamp = lowerBin(LpTime, MINUTE)',
@@ -95,6 +96,7 @@ def tv_ohlcv_1m_from_quotes():
     ]).drop_columns(['PriceQty'])
     return bars.view(list(TV_OHLCV_SCHEMA_COLS))
 
+@lru_cache(maxsize=1)
 def tv_ohlcv_5m_from_quotes():
     t = _TV_QUOTES_DTW.table.update([
         'Timestamp = lowerBin(LpTime, 5 * MINUTE)',
@@ -116,6 +118,7 @@ def tv_ohlcv_5m_from_quotes():
     ]).drop_columns(['PriceQty'])
     return bars.view(list(TV_OHLCV_SCHEMA_COLS))
 
+@lru_cache(maxsize=1)
 def tv_ohlcv_1m_filled():
     """Lightweight recent 1m OHLCV (current + previous) with IsEmpty flag.
 
@@ -130,6 +133,7 @@ def tv_ohlcv_1m_filled():
     ])
     return filled.view(list(TV_OHLCV_FILLED_SCHEMA_COLS))
 
+@lru_cache(maxsize=1)
 def tv_ohlcv_5m_filled():
     """Lightweight recent 5m OHLCV (current + previous) with IsEmpty flag.
 
@@ -144,6 +148,7 @@ def tv_ohlcv_5m_filled():
     ])
     return filled.view(list(TV_OHLCV_FILLED_SCHEMA_COLS))
 
+@lru_cache(maxsize=1)
 def tv_synthetic_trades_view():
     t = _TV_QUOTES_DTW.table.update([
         'ts = LpTime',
