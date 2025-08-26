@@ -11,6 +11,7 @@ Notes:
 - Implement REST pagination and convert provider responses into the same schema used by the real-time feeder.
 """
 from __future__ import annotations
+from functools import lru_cache
 from typing import List, Tuple, Optional, Callable
 from datetime import datetime
 import requests
@@ -61,6 +62,7 @@ class BinanceGapFiller(GapFiller):
         ranges = [(int(prev_val) + 1, int(cur_val) - 1) for prev_val, cur_val in zip(prev_list, cur_list)]
         return ranges
     
+    @lru_cache(maxsize=1)
     def build_gaps_table(self, dh_table):
         # Build symbol/exchange filter and select key column
         query = f"Symbol == '{self.symbol}'"

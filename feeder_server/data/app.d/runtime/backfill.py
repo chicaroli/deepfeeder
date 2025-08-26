@@ -24,7 +24,6 @@ class GapFiller:
         self.key_column = key_column
         self.exchange = exchange
         self.api_key = api_key
-    # watermark removed: gap detection will rely on table state only
         self._worker = None
         self._worker_lock = Lock()
         self._log_key = f"{self.provider}{':' + self.exchange if self.exchange else ''}:{self.symbol}"
@@ -132,7 +131,7 @@ class GapFiller:
                 merged_gaps = self._coalesce_gaps(gaps, max_ids=self.max_ids_per_request, merge_distance=self.gap_merge_distance)
 
                 # Emit detection events and invoke provider backfill
-                emit_event("feeder", self._log_key, "gap_detection", "INFO", "GAP_DETECTION_SUMMARY",
+                emit_event("feeder", self._log_key, "gap_detection", "INFO", "GAP_DETECTION",
                     f"Detected {len(merged_gaps)} backfill request(s) (from {len(gaps)} detected gaps)",
                     {
                         "provider": self.provider,

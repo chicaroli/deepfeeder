@@ -11,7 +11,9 @@ from feeders.binance.schema import (
 )
 from runtime.eventlog import emit_event
 from deephaven.time import to_j_instant
+# from deephaven.arrow import to_arrow
 import pyarrow as pa
+
 from typing import Iterable
 
 name = 'binance'
@@ -92,18 +94,26 @@ def register_tap(fn):
     register_binance_trades_tap(fn)
 
 
-def build_seen(symbol: str, t0: datetime, t1: datetime):
+def build_seen(symbol: str, t0: datetime, t1: datetime) -> set[Tuple[str, Optional[int]]]:
+    """
+    Build a set of (symbol.lower(), TradeID) tuples for deduplication within a timestamp window.
+
+    Uses Deephaven's Arrow conversion for efficiency.
+    """
     seen: set[Tuple[str, Optional[int]]] = set()
     try:
         t = binance_trades_table()
-        df = t.where(f"Symbol == '{symbol.upper()}'") \
-             .where(f"Timestamp >= `{t0.isoformat()}` && Timestamp < `{t1.isoformat()}`") \
-             .select_distinct('Symbol', 'TradeID') \
-             .to_pandas()
-        for _, row in df.iterrows():
-            s = str(row['Symbol']).lower()
-            tid = int(row['TradeID']) if row['TradeID'] is not None else None
-            seen.add((s, tid))
+        filtered = t.where(f"Symbol == '{symbol.upper()}'") \
+                    .where(f"Timestamp >= `{t0.isoformat()}` && Timestamp < `{t1.isoformat()}`") \
+                    .select_distinct('Symbol', 'TradeID')
+        
+        arrow_tbl = pa.arrow.to_arrow(filtered)
+        symbol_arr = arrow_tbl.column('Symbol')
+        tradeid_arr = arrow_tbl.column('TradeID')
+        for s, tid in zip(symbol_arr, tradeid_arr):
+            sym = str(s).lower()
+            trade_id = int(tid) if tid is not None else None
+            seen.add((sym, trade_id))
     except Exception:
         pass
     return seen
