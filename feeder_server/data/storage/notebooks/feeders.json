@@ -3,13 +3,13 @@
     "provider": "binance",
     "name": "main",
     "symbols": ["btcusdt"],
-    "autostart": false
+    "autostart": true
   },
   {
     "provider": "binance",
     "name": "other",
     "symbols": ["ethusdt", "ltcusdt", "solusdt", "maticusdt", "avaxusdt"],
-    "autostart": false
+    "autostart": true
   },
   {
     "provider": "tradingview",
@@ -18,7 +18,7 @@
       "BMFBOVESPA:INDV2025", "BMFBOVESPA:WINV2025",
       "BMFBOVESPA:DOLU2025", "BMFBOVESPA:WDOV2025"
     ],
-    "autostart": false
+    "autostart": true
   },
  {
     "provider": "tradingview",

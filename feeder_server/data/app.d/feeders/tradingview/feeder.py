@@ -1,21 +1,23 @@
 # ingest.feeders.providers.tradingview.feeder
 from __future__ import annotations
-import json, time, collections
+
+import json, time
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timezone, timedelta
-import os
-from threading import Lock as _Lock
 
 import websocket
 from deephaven.time import to_j_instant
 
-from feeders.base import BaseFeeder
-from feeders.common.queue_batch import QueueBatchMixin
 from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
+from feeders.base import BaseFeeder
+from feeders.common.queue_batch import QueueBatchMixin
 from .schema import tv_quotes_writer, tv_bars_writer
 from .config import load_config
 from .backfill import TradingViewGapFiller
+from .transform import split_exchange_ticker, to_instant_from_epoch_s
+from .journal import TradingViewJournal
+
 
 WS_URL = "wss://data.tradingview.com/socket.io/websocket"
 
@@ -34,20 +36,6 @@ def _iter_frames(payload: str):
         except Exception:
             return
 
-def _to_instant_from_epoch_s(x: Optional[float]):
-    if x is None:
-        return None
-    try:
-        return to_j_instant(datetime.fromtimestamp(int(x), tz=timezone.utc))
-    except Exception:
-        return None
-
-def _split_exchange_ticker(s: str) -> Tuple[Optional[str], str]:
-    s = (s or "").strip()
-    if ":" in s:
-        exch, tick = s.split(":", 1)
-        return (exch.strip().upper() or None), tick.strip().upper()
-    return None, s.upper()
 
 class _SymState:
     __slots__ = ("t", "lp", "bid", "ask", "vol", "ch", "chp", "last_vol")
@@ -69,13 +57,15 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
         self.ws = None
         self._writer = tv_quotes_writer()
         self._bars_writer = tv_bars_writer()
+        # Journal instance (managed per-feeder)
+        self._journal: Optional[TradingViewJournal] = None
         cfg = load_config()
         self._cfg = cfg
         QueueBatchMixin.__init__(self, queue_maxlen=5000)
         # Symbol meta/state
         self._sym_meta: Dict[str, Tuple[Optional[str], str, str]] = {}
         for raw in self.symbols:
-            exch, tick = _split_exchange_ticker(raw)
+            exch, tick = split_exchange_ticker(raw)
             subscribe = f"{exch}:{tick}" if exch else tick
             self._sym_meta[subscribe.lower()] = (exch, tick, subscribe)
         self._state: Dict[str, _SymState] = {k: _SymState() for k in self._sym_meta.keys()}
@@ -93,6 +83,13 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
             return "already running"
         self.started_at = time.time()
         self.last_error = None
+        # Start the per-feeder TradingViewJournal instance
+        try:
+            self._journal = TradingViewJournal("feeder", f"{self.provider}:{self.name}", "journal")
+            self._journal.start()
+        except Exception:
+            # If journaling can't be started, continue without failing the feeder
+            self._journal = None
         # Optional warm replay before opening WS (config-gated)
         try:
             if self._cfg.warm_replay_on_start:
@@ -126,7 +123,7 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
                 exchange, tick = parts
             else:
                 exchange, tick = None, raw
-            gap_filler = TradingViewGapFiller(symbol=tick, exchange=exchange)
+            gap_filler = TradingViewGapFiller(symbol=tick, exchange=exchange, journal=self._journal)
             gap_filler.start(dh_table=self._bars_writer.table)
             self.gap_fillers.append(gap_filler)
 
@@ -150,6 +147,16 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
             self.listener_worker.join(timeout=3)
         emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "STOP", "Feeder stopping")
         self.emit_status(force=True)
+        # Stop the per-feeder journal
+        try:
+            if self._journal is not None:
+                try:
+                    self._journal.stop(timeout=2.0)
+                except Exception:
+                    pass
+                self._journal = None
+        except Exception:
+            pass
         return "stopped"
 
     def _subscribe(self, ws):
@@ -187,7 +194,7 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
                 continue
             st = self._state[sym_key]
             exch, tick, _subscribe = self._sym_meta[sym_key]
-            new_t = _to_instant_from_epoch_s(v.get("lp_time"))
+            new_t = to_instant_from_epoch_s(v.get("lp_time"))
             if new_t is not None:
                 if st.t is not None and new_t < st.t:
                     continue
@@ -225,8 +232,8 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
                 st.chp,
                 vol_delta,
             )
+            # dh_row = ws_row_to_dh_row(row)
             try:
-                from threading import Lock  # local import to avoid circular issues
                 with self._q_lock:
                     if len(self._q) < self._q.maxlen:
                         self._q.append(row)

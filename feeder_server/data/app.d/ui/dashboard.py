@@ -67,9 +67,7 @@ FeederDashboard = ui.dashboard(
             ui.panel(ui.table(dfb.get_binance_trades_table()), title="Binance Trades"),
             ui.panel(ui.table(dfb.get_binance_ohlcv_1m_table()), title="Binance OHLCV 1m"),
             ui.panel(ui.table(dfb.get_tv_quotes_table()), title="TV Quotes (delayed)"),
-            ui.panel(ui.table(dfb.get_tv_bars_table()), title="TV Bars (backfill)"),
-            ui.panel(ui.table(dfb.get_tv_ohlcv_1m_table()), title="TV OHLCV 1m"),
-            ui.panel(ui.table(dfb.get_tv_ohlcv_5m_table()), title="TV OHLCV 5m"),
+            ui.panel(ui.table(dfb.get_tv_bars_table_deduped()), title="TV Bars"),
             ui.panel(ui.table(dfb.get_tv_ohlcv_1m_table()), title="TV OHLCV 1m"),
             ui.panel(ui.table(dfb.get_tv_ohlcv_5m_table()), title="TV OHLCV 5m"),
             ui.panel(

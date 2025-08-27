@@ -2,13 +2,15 @@
 TradingViewGapFiller: Fills missing OHLCV bars in _TV_BARS_DTW using TradingView API.
 Mirrors the BinanceGapFiller pattern for consistency.
 """
-from deephaven.time import to_j_instant
-from tvDatafeed import Interval
+import pandas as pd
 from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from tvDatafeed import Interval
+
+from feeders.tradingview.transform import df_row_to_dh_row
 from feeders.tradingview.api import fetch_tv_data
 from feeders.tradingview.schema import tv_bars_writer
-import pandas as pd
-
 from runtime.backfill import GapFiller
 from runtime.eventlog import emit_event
 
@@ -19,11 +21,19 @@ class TradingViewGapFiller(GapFiller):
     Implements provider-specific gap detection and backfill using TradingView API.
     Uses a watermark (latest timestamp) for incremental backfill, mimicking Binance structure.
     """
-    def __init__(self, symbol: str, exchange: str, interval: Interval = Interval.in_1_minute):
+    def __init__(self, symbol: str, exchange: str, interval: Interval = Interval.in_1_minute, journal: Optional[Any] = None):
+        """Create a TradingViewGapFiller.
+
+        journal: optional journaling instance (e.g., TradingViewJournal). If
+        provided, written rows will be forwarded to it using
+        journal.journal_bar_nonblocking(...).
+        """
         super().__init__(provider="tradingview", symbol=symbol, key_column="Timestamp", exchange=exchange)
         self.interval = interval
         self.writer = tv_bars_writer()
         self.watermark = None  # Latest timestamp written
+        # Optional journaling instance (e.g., TradingViewJournal)
+        self._journal: Optional[Any] = journal
 
     def provider_gap_detection(self, dh_table, start: datetime = None, end: datetime = None):
         """
@@ -94,23 +104,36 @@ class TradingViewGapFiller(GapFiller):
             written = 0
             latest_ts = self.watermark
             for _, row in df.iterrows():
-                # Convert pandas Timestamp to Python datetime, then to Java Instant for Deephaven
-                dt = row['datetime']
-                if isinstance(dt, pd.Timestamp):
-                    dt = dt.to_pydatetime()
-                j_dt = to_j_instant(dt)
+                dh_row = df_row_to_dh_row(self.exchange, self.symbol, row)
                 self.writer.write_row(
-                    self.exchange,
-                    self.symbol,
-                    j_dt,
-                    row['open'],
-                    row['high'],
-                    row['low'],
-                    row['close'],
-                    row['volume']
+                    dh_row['exchange'],
+                    dh_row['symbol'],
+                    dh_row['datetime'],
+                    dh_row['open'],
+                    dh_row['high'],
+                    dh_row['low'],
+                    dh_row['close'],
+                    dh_row['volume']
                 )
+                # Forward to the provided journal instance if any (non-blocking)
+                if getattr(self, '_journal', None) is not None:
+                    try:
+                        self._journal.journal_bar_nonblocking(
+                            dh_row['exchange'],
+                            dh_row['symbol'],
+                            dh_row['datetime'],
+                            dh_row['open'],
+                            dh_row['high'],
+                            dh_row['low'],
+                            dh_row['close'],
+                            dh_row['volume'],
+                        )
+                    except Exception:
+                        # Keep backfill robust; journaling failures must not break ingest
+                        pass
                 written += 1
                 # Update watermark if this row is newer
+                dt = row['datetime']
                 if latest_ts is None or dt > latest_ts:
                     latest_ts = dt
             self.watermark = latest_ts

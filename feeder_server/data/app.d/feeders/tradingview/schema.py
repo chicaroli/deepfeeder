@@ -1,6 +1,7 @@
 # ingest.feeders.providers.tradingview.schema
-from deephaven import DynamicTableWriter, agg
 import deephaven.dtypes as dht
+from deephaven import DynamicTableWriter, agg
+
 from feeders.bins import bins_recent
 from functools import lru_cache
 
@@ -22,6 +23,7 @@ __all__ = [
     'TV_OHLCV_TIME_COL', 'TV_OHLCV_SYMBOL_COL', 'TV_OHLCV_SCHEMA_COLS', 'TV_OHLCV_FILLED_SCHEMA_COLS'
 ]
 
+# ---------- Primary Tables Definitions ----------------------------------------
 _TV_QUOTES_DTW = DynamicTableWriter({
     'Exchange': dht.string,
     'Symbol': dht.string,
@@ -47,52 +49,26 @@ _TV_BARS_DTW = DynamicTableWriter({
 })
 
 
-# --- mirrored writer with taps ---------------------------------------------
-_TV_TAPS = []
-
-
-class _MirroredWriter:
-    def __init__(self, dtw: DynamicTableWriter):
-        self._dtw = dtw
-
-    def write_row(self, *args):
-        self._dtw.write_row(*args)
-        for fn in list(_TV_TAPS):
-            try:
-                fn(*args)
-            except Exception:
-                pass
-
-    def write_row_direct(self, *args):
-        self._dtw.write_row(*args)
-
-    @property
-    def table(self):
-        return self._dtw.table
-
-
-_TV_QUOTES_MIRROR = _MirroredWriter(_TV_QUOTES_DTW)
-
-
-def register_tv_quotes_tap(fn):
-    _TV_TAPS.append(fn)
-
-
-@lru_cache(maxsize=1)
 def tv_quotes_writer():
-    return _TV_QUOTES_MIRROR
+    return _TV_QUOTES_DTW
 
-@lru_cache(maxsize=1)
 def tv_quotes_table():
     return _TV_QUOTES_DTW.table
 
-# TV bars writer and table accessors
 def tv_bars_writer():
     return _TV_BARS_DTW
 
 def tv_bars_table():
     return _TV_BARS_DTW.table
 
+@lru_cache(maxsize=1)
+def tv_bars_table_deduped():
+    # Deduplicate bars by (Exchange, Symbol, Timestamp).
+    deduped = _TV_BARS_DTW.table.sort(['Exchange', 'Symbol', 'Timestamp']).last_by(['Exchange', 'Symbol', 'Timestamp'])
+    return deduped
+
+
+# ---------- Derived Tables Definitions ----------------------------------------
 # TV OHLCV from quotes
 @lru_cache(maxsize=1)
 def tv_ohlcv_1m_from_quotes():
@@ -138,6 +114,7 @@ def tv_ohlcv_5m_from_quotes():
     ]).drop_columns(['PriceQty'])
     return bars.view(list(TV_OHLCV_SCHEMA_COLS))
 
+# TV Filled OHLCV from quotes
 @lru_cache(maxsize=1)
 def tv_ohlcv_1m_filled():
     """Lightweight recent 1m OHLCV (current + previous) with IsEmpty flag.
@@ -167,17 +144,3 @@ def tv_ohlcv_5m_filled():
         'IsEmpty = isNull(Volume)'
     ])
     return filled.view(list(TV_OHLCV_FILLED_SCHEMA_COLS))
-
-@lru_cache(maxsize=1)
-def tv_synthetic_trades_view():
-    t = _TV_QUOTES_DTW.table.update([
-        'ts = LpTime',
-        'provider = "tradingview"',
-        'exchange = Exchange',
-        'symbol = Symbol',
-        'price = LastPrice',
-        'qty = VolDelta',
-        'raw = (String) null',
-        'quality = "synthetic_quote"',
-    ])
-    return t.view(['ts','provider','exchange','symbol','price','qty','raw','quality'])

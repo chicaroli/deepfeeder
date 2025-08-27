@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from collections import deque
 from threading import Lock
-from typing import Deque, Iterable, Any
+from typing import Deque
 import time
 
 from runtime.eventlog import emit_event
