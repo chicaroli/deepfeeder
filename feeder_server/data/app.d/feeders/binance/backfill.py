@@ -11,7 +11,6 @@ Notes:
 - Implement REST pagination and convert provider responses into the same schema used by the real-time feeder.
 """
 from __future__ import annotations
-from functools import lru_cache
 from typing import List, Tuple, Optional, Callable
 from datetime import datetime
 import requests
@@ -40,29 +39,26 @@ class BinanceGapFiller(GapFiller):
     BASE_URL = "https://api.binance.com"
 
     def __init__(self, symbol: str, key_column: str = "TradeID", exchange: str = None, api_key: str | None = None):
-        super().__init__(provider='binance', symbol=symbol, key_column=key_column, exchange=exchange, api_key=api_key)
+        super().__init__(provider='binance', symbols=[symbol], key_column=key_column, exchange=exchange, api_key=api_key)
+        self.symbol = symbol
         self.gaps_tbl = None
 
-    def provider_gap_detection(self, dh_table) -> Optional[List[Tuple[int, int]]]:
+    def provider_gap_detection(self, dh_table):
         """
-        Attempt to compute gaps using Deephaven table operations on the server and return
-        a list of (start_id, end_id) tuples. Returns None if the operation isn't supported
-        or fails (caller will fall back to client-side extraction).
+        Compute gaps for the single symbol and return as a dict for compatibility with GapFiller.
         """
-        # Check existing DH gap table
         if self.gaps_tbl is None:
             self.build_gaps_table(dh_table)
 
-        arrow_gaps = to_arrow(self.gaps_tbl)        # pylint: disable=no-member
+        arrow_gaps = to_arrow(self.gaps_tbl)
         if arrow_gaps.num_rows == 0:
-            return []
-
-        prev_list = arrow_gaps.column('PrevID').to_pylist()
-        cur_list = arrow_gaps.column(self.key_column).to_pylist()
-        ranges = [(int(prev_val) + 1, int(cur_val) - 1) for prev_val, cur_val in zip(prev_list, cur_list)]
-        return ranges
+            gaps = []
+        else:
+            prev_list = arrow_gaps.column('PrevID').to_pylist()
+            cur_list = arrow_gaps.column(self.key_column).to_pylist()
+            gaps = [(int(prev_val) + 1, int(cur_val) - 1) for prev_val, cur_val in zip(prev_list, cur_list)]
+        return {self.symbol: gaps}
     
-    @lru_cache(maxsize=1)
     def build_gaps_table(self, dh_table):
         # Build symbol/exchange filter and select key column
         query = f"Symbol == '{self.symbol}'"
@@ -76,12 +72,12 @@ class BinanceGapFiller(GapFiller):
             .select(["PrevID", self.key_column])
             )
 
-    def provider_backfill_gaps(self, gaps: List[Tuple[int, int]]):
+    def provider_backfill_gaps(self, gaps_dict):
         """Backfill each gap using Binance REST `/api/v3/historicalTrades` with `fromId` pagination.
 
-        Emits start/page/done events. Conversion/ingestion of returned JSON rows must be
-        implemented by the caller (TODO area) to push rows into the feeder writer or queue.
+        Accepts a dict mapping symbol to list of gaps for compatibility with GapFiller.
         """
+        gaps = gaps_dict.get(self.symbol, [])
         if not gaps:
             return
 

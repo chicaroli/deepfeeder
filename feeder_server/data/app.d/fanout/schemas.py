@@ -20,7 +20,6 @@ import feeders.binance.schema as binance_sch
 from feeders.tradingview import (
     tv_quotes_table,
     tv_ohlcv_1m_filled,
-    tv_ohlcv_5m_filled,
 )
 import feeders.tradingview.schema as tv_sch
 
@@ -71,12 +70,5 @@ SCHEMAS: Dict[Tuple[str, str], SchemaSpec] = {
         symbol_col=tv_sch.TV_OHLCV_SYMBOL_COL,
         cols=tv_sch.TV_OHLCV_FILLED_SCHEMA_COLS,
         bin_period_minutes=1,
-    ),
-    ("tradingview", "ohlcv_5m"): SchemaSpec(
-        table_fn=tv_ohlcv_5m_filled,
-        time_col=tv_sch.TV_OHLCV_TIME_COL,
-        symbol_col=tv_sch.TV_OHLCV_SYMBOL_COL,
-        cols=tv_sch.TV_OHLCV_FILLED_SCHEMA_COLS,
-        bin_period_minutes=5,
     ),
 }

@@ -111,9 +111,11 @@ class TradingViewJournal:
                 ts_str = ts.isoformat()
             except Exception:
                 ts_str = repr(ts)
+        # Always uppercase symbol before writing
+        symbol_upper = (symbol or "").upper() if symbol is not None else None
         return {
             "exchange": (exchange or "").upper() if exchange is not None else None,
-            "symbol": (symbol or "").upper() if symbol is not None else None,
+            "symbol": symbol_upper,
             "timestamp": ts_str,
             "open": open_p,
             "high": high,
@@ -134,9 +136,17 @@ class TradingViewJournal:
         if df.empty:
             return
 
+        # Deduplicate by exchange, symbol, timestamp (keep last row per key)
+        dedup_cols = ["exchange", "symbol", "timestamp"]
+        try:
+            df = df.sort_values(dedup_cols + ["timestamp"]).drop_duplicates(subset=dedup_cols, keep="last").reset_index(drop=True)
+        except Exception:
+            # If dedup fails, emit event and continue with original df
+            emit_event(self._service, self._name, self._role, "WARNING", "JOURNAL_DEDUP_FAIL", "deduplication failed; writing all rows")
+
         # Use pyarrow.dataset to write a hive-partitioned dataset in a single call
         try:
-            tbl = to_arrow_table(df.reset_index(drop=True))
+            tbl = to_arrow_table(df)
             epoch_ms = int(time.time() * 1000)
             self._file_seq = getattr(self, '_file_seq', 0) + 1
             basename = f"part-tv-{epoch_ms}-{self._file_seq}-{{i}}.parquet"

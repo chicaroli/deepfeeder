@@ -3,29 +3,22 @@
     "provider": "binance",
     "name": "main",
     "symbols": ["btcusdt"],
-    "autostart": true
+    "autostart": false
   },
   {
     "provider": "binance",
     "name": "other",
     "symbols": ["ethusdt", "ltcusdt", "solusdt", "maticusdt", "avaxusdt"],
-    "autostart": true
+    "autostart": false
   },
   {
     "provider": "tradingview",
-    "name": "b3_indexes",
+    "name": "b3_futures",
     "symbols": [
       "BMFBOVESPA:INDV2025", "BMFBOVESPA:WINV2025",
-      "BMFBOVESPA:DOLU2025", "BMFBOVESPA:WDOV2025"
-    ],
-    "autostart": true
-  },
- {
-    "provider": "tradingview",
-    "name": "b3_di",
-    "symbols": [
+      "BMFBOVESPA:DOLU2025", "BMFBOVESPA:WDOV2025",
       "BMFBOVESPA:DI1Z2025", "BMFBOVESPA:DI1N2026"
     ],
     "autostart": true
-  }  
+  }
 ]

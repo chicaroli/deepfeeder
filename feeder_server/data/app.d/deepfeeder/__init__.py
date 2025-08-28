@@ -21,10 +21,10 @@ from feeders.tradingview import (
     tv_quotes_table as get_tv_quotes_table,
     tv_bars_table as get_tv_bars_table,
     tv_bars_table_deduped as get_tv_bars_table_deduped,
-    tv_ohlcv_1m_from_quotes as get_tv_ohlcv_1m_table,
-    tv_ohlcv_5m_from_quotes as get_tv_ohlcv_5m_table,
-    tv_ohlcv_1m_filled as get_tv_ohlcv_1m_filled_table,
-    tv_ohlcv_5m_filled as get_tv_ohlcv_5m_filled_table,
+    tv_ohlcv_1m_from_quotes as get_tv_ohlcv_1m_from_quotes,
+    tv_ohlcv_1m_filled as get_tv_ohlcv_1m_filled,
+    tv_ohlcv_1m as get_tv_ohlcv_1m_table,
+    tv_ohlcv_5m as get_tv_ohlcv_5m_table,
 )
 from feeders.bins import bins_recent
 from fanout import get_fanout_stats_table as fanout_get_stats_table
@@ -32,6 +32,8 @@ from runtime.threads_bus import get_threads_table
 from runtime.eventlog_bus import get_eventlog_table
 from runtime.services import Services
 from persistence import JournalService, ensure_dirs
+import atexit
+import signal
 
 import feeders  # convenience namespace
 import ingest   # convenience namespace
@@ -82,10 +84,10 @@ def tables() -> Dict[str, Table]:
         "tv_quotes": get_tv_quotes_table(),
         "tv_bars": get_tv_bars_table(),
         "tv_bars_deduped": get_tv_bars_table_deduped(),
+        "tv_ohlcv_1m_from_quotes": get_tv_ohlcv_1m_from_quotes(),
+        "tv_ohlcv_1m_filled": get_tv_ohlcv_1m_filled(),
         "tv_ohlcv_1m": get_tv_ohlcv_1m_table(),
-        "tv_ohlcv_1m_filled": get_tv_ohlcv_1m_filled_table(),
         "tv_ohlcv_5m": get_tv_ohlcv_5m_table(),
-        "tv_ohlcv_5m_filled": get_tv_ohlcv_5m_filled_table(),
         # Lightweight recent windows (hard-coded 2 bars: current + previous)
         "bins_1m_recent": bins_recent(1, 2),
         "bins_5m_recent": bins_recent(5, 2),
@@ -101,9 +103,13 @@ __all__ = [
     "get_status_table", "get_configs_table", "get_threads_table",
     "get_binance_trades_table", "get_binance_ohlcv_1m_table", "get_binance_ohlcv_1m_filled_table",
     "get_binance_ohlcv_5m_table", "get_binance_ohlcv_5m_filled_table",
+    
     "get_tv_quotes_table", "get_tv_bars_table", "get_tv_bars_table_deduped",
-    "get_tv_ohlcv_1m_table", "get_tv_ohlcv_1m_filled_table",
-    "get_tv_ohlcv_5m_table", "get_tv_ohlcv_5m_filled_table",
+    "get_tv_ohlcv_1m_from_quotes",
+    "get_tv_ohlcv_1m_filled",
+    "get_tv_ohlcv_1m_table",
+    "get_tv_ohlcv_5m_table",
+
     # Helpers
     "tables", "get_fanout_stats_table",
     # Persistence bindings (lazy)
@@ -132,3 +138,31 @@ def replay(provider: str, symbol: str, t0_iso: str, t1_iso: str, exchange: str =
 
 def purge_hot_partitions(keep_days: int = 14) -> int:
     return services.get("journal").purge_hot_partitions(keep_days)
+
+
+# Graceful shutdown handlers: attempt to stop feeders and journal on process exit
+def _graceful_shutdown(*_args):
+    try:
+        # Stop all feeders
+        try:
+            feeder_manager.stop_all()
+        except Exception:
+            pass
+        # Stop journal service if running
+        try:
+            stop_journal()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+# Register on interpreter exit
+atexit.register(_graceful_shutdown)
+# Listen for common termination signals
+for sig in (signal.SIGINT, signal.SIGTERM):
+    try:
+        signal.signal(sig, _graceful_shutdown)
+    except Exception:
+        # Some environments (e.g., restricted app containers) may not allow setting signals
+        pass

@@ -18,15 +18,33 @@ class GapFiller:
     Detects gaps in Deephaven tables and backfills missing data for a given symbol, exchange (optional), and key column (e.g., TradeID).
     Tracks a last_watermark to avoid refilling already-handled ranges.
     """
-    def __init__(self, provider: str, symbol: str, key_column: str, exchange: str = None, api_key: str | None = None, max_emit: int = 50):
+    def __init__(self, provider: str, symbols: str | list[str], key_column: str, exchange: None | str | list[str] = None, api_key: str | None = None, max_emit: int = 50, feeder_name: str = None):
         self.provider = provider
-        self.symbol = symbol.upper()
+        # Normalize symbols to a list of uppercase strings
+        if isinstance(symbols, str):
+            self.symbols = [symbols.upper()]
+        else:
+            self.symbols = [s.upper() for s in symbols]
         self.key_column = key_column
-        self.exchange = exchange
+        # Handle exchange as None, str, or list[str]
+        if exchange is None:
+            self.exchanges = [None] * len(self.symbols)
+        elif isinstance(exchange, str):
+            self.exchanges = [exchange] * len(self.symbols)
+        elif isinstance(exchange, list):
+            if len(exchange) != len(self.symbols):
+                raise ValueError("Length of exchange list must match symbols list")
+            self.exchanges = exchange
+        else:
+            raise TypeError("exchange must be None, str, or list[str]")
+        # For backward compatibility, set self.exchange to first exchange
+        self.exchange = self.exchanges[0] if self.exchanges else None
         self.api_key = api_key
+        self.feeder_name = feeder_name if feeder_name is not None else ','.join(self.symbols)
         self._worker = None
         self._worker_lock = Lock()
-        self._log_key = f"{self.provider}{':' + self.exchange if self.exchange else ''}:{self.symbol}"
+        # For logging, use feeder_name
+        self._log_key = f"{self.provider}{':' + str(self.exchange) if self.exchange else ''}:{self.feeder_name}"
 
         # The Deephaven mirrored table reference will be attached at start()
         self.dh_table = None
@@ -75,7 +93,7 @@ class GapFiller:
         try:
             worker = spawn('feeder', self._log_key, 'gapfiller', self.run, scan_interval if scan_interval else 60)
             self._set_worker(worker)
-            emit_event("feeder", self._log_key, "backfill", "INFO", "START", f"Starting gap filler for {self.symbol}",
+            emit_event("feeder", self._log_key, "backfill", "INFO", "START", f"Starting gap filler for {self.feeder_name}",
                        {"scan_interval": scan_interval},)
             return worker
         except Exception as ex:
@@ -123,28 +141,36 @@ class GapFiller:
                     continue
 
                 # Gap Detection: Call provider specific gap detection methods
-                gaps = self.provider_gap_detection(self.dh_table)
-                if not gaps:
+                gaps_dict = self.provider_gap_detection(self.dh_table)
+                if not gaps_dict:
                     continue
 
-                # Coalesce gaps to optimize backfill requests
-                merged_gaps = self._coalesce_gaps(gaps, max_ids=self.max_ids_per_request, merge_distance=self.gap_merge_distance)
+                # Coalesce gaps per symbol
+                merged_gaps_dict = self._coalesce_gaps(gaps_dict, max_ids=self.max_ids_per_request, merge_distance=self.gap_merge_distance)
 
-                # Emit detection events and invoke provider backfill
-                emit_event("feeder", self._log_key, "gap_detection", "INFO", "GAP_DETECTION",
-                    f"Detected {len(merged_gaps)} backfill request(s) (from {len(gaps)} detected gaps)",
-                    {
+                # Emit detection events and invoke provider backfill per symbol
+                for symbol in self.symbols:
+                    gaps = gaps_dict.get(symbol, [])
+                    merged_gaps = merged_gaps_dict.get(symbol, [])
+                    meta = {
                         "provider": self.provider,
-                        "symbol": self.symbol,
+                        "feeder_name": self.feeder_name,
+                        "symbol": symbol,
                         "total_gaps": len(gaps),
                         "merged_gaps": len(merged_gaps),
-                        "sample_gaps": gaps[: min(5, len(gaps))] if len(gaps) else [],
                         "exchange": self.exchange,
-                        }
-                    )
-
-                # Call Backfill Manager
-                self.backfill_gaps(merged_gaps)
+                    }
+                    # If sample_gaps is present, serialize datetimes
+                    if gaps:
+                        meta["sample_gaps"] = [
+                            (g[0].isoformat() if hasattr(g[0], "isoformat") else str(g[0]),
+                                g[1].isoformat() if hasattr(g[1], "isoformat") else str(g[1]))
+                            for g in gaps
+                        ]
+                        emit_event("feeder", self._log_key, "gap_detection", "INFO", "GAP_DETECTION",
+                                   f"Detected {len(merged_gaps)} backfill request(s) (from {len(gaps)} detected gaps) for {symbol}",
+                                   meta)
+                self.backfill_gaps(merged_gaps_dict)
 
             except Exception as ex:
                 # Generic worker error event for the provider
@@ -156,73 +182,59 @@ class GapFiller:
     def provider_gap_detection(self, dh_table, start: Optional[datetime] = None, end: Optional[datetime] = None) -> Optional[List[Tuple[int, int]]]:
         raise NotImplementedError("Provider-specific _detect_gaps_table() must be implemented in subclass.")
 
-    def backfill_gaps(self, merged_gaps: List[Tuple[int, int]]):
+    def backfill_gaps(self, merged_gaps_dict):
         """
         Backfill missing data for each gap using provider-specific REST API logic.
-        This is a stub to be implemented per-provider.
+        Handles gaps as a dict mapping symbol to list of gaps.
         """
-        # Limit the number of requests per scan to avoid aggressive bursts.
-        to_process = merged_gaps[: self.max_requests_per_scan]
-
-        for idx, (start_id, end_id) in enumerate(to_process):
-            try:
-                # Provider receives a single merged (start,end) tuple wrapped in a list
-                self.provider_backfill_gaps([(start_id, end_id)])
-            except Exception as ex:
-                emit_event("feeder", self._log_key, "backfill", "ERROR", "BACKFILL_REQ_ERR",
-                           f"Error while backfilling {self.symbol} {start_id}..{end_id}: {ex}", {"error": str(ex)})
-            # Throttle between requests
-            if idx < len(to_process) - 1:
-                time.sleep(self.min_sleep_between_requests)
-
-        # If we had more merged requests than we processed, emit info so operator knows there's remaining work
-        if len(merged_gaps) > len(to_process):
-            emit_event("feeder", self._log_key, "backfill", "INFO", "BACKFILL_DEFERRED",
-                       f"Deferred {len(merged_gaps) - len(to_process)} merged backfill request(s) to later scans",
-                       {"deferred": len(merged_gaps) - len(to_process)})
+        for symbol in self.symbols:
+            merged_gaps = merged_gaps_dict.get(symbol, [])
+            to_process = merged_gaps[: self.max_requests_per_scan]
+            for idx, (start_id, end_id) in enumerate(to_process):
+                try:
+                    self.provider_backfill_gaps({symbol: [(start_id, end_id)]})
+                except Exception as ex:
+                    emit_event("feeder", self._log_key, "backfill", "ERROR", "BACKFILL_REQ_ERR",
+                               f"Error while backfilling {self.feeder_name} {symbol} {start_id}..{end_id}: {ex}", {"error": str(ex)})
+                if idx < len(to_process) - 1:
+                    time.sleep(self.min_sleep_between_requests)
+            if len(merged_gaps) > len(to_process):
+                emit_event("feeder", self._log_key, "backfill", "INFO", "BACKFILL_DEFERRED",
+                           f"Deferred {len(merged_gaps) - len(to_process)} merged backfill request(s) for {symbol} to later scans",
+                           {"deferred": len(merged_gaps) - len(to_process), "symbol": symbol})
 
     def provider_backfill_gaps(self, gaps: List[Tuple[int, int]]):
         raise NotImplementedError("Provider-specific backfill_gaps() must be implemented in subclass.")
 
-    def _coalesce_gaps(self, gaps: List[Tuple[int, int]], max_ids: int, merge_distance: int) -> List[Tuple[int, int]]:
+    def _coalesce_gaps(self, gaps_dict, max_ids: int, merge_distance: int):
         """
-        Merge and coalesce a list of integer ID gaps into a smaller set of request ranges.
-
-        - gaps: list of (start_id, end_id)
-        - max_ids: maximum span length for a single request
-        - merge_distance: if two gaps are within `merge_distance` IDs, merge them
-
-        Returns a list of non-overlapping, sorted (start, end) ranges.
+        Merge and coalesce gaps per symbol into a smaller set of request ranges.
+        Accepts a dict mapping symbol to list of gaps.
+        Returns a dict mapping symbol to list of merged gaps.
         """
-        if not gaps:
-            return []
-
-        # Normalize and sort
-        normalized = [(int(s), int(e)) for s, e in gaps]
-        normalized.sort()
-
-        merged: List[Tuple[int, int]] = []
-        cur_s, cur_e = normalized[0]
-
-        for s, e in normalized[1:]:
-            # If next gap is close enough (within merge_distance) OR merging keeps size under max_ids, merge
-            potential_end = max(cur_e, e)
-            if s <= cur_e + merge_distance or (potential_end - cur_s) <= max_ids:
-                # Expand current range
-                cur_e = potential_end
-                # If merged range exceeds max_ids, split into bounded chunks
-                if (cur_e - cur_s) > max_ids:
-                    # split into multiple chunks of size max_ids
-                    while (cur_e - cur_s) > max_ids:
-                        chunk_end = cur_s + max_ids
-                        merged.append((cur_s, chunk_end))
-                        cur_s = chunk_end + 1
-                    # cur_s..cur_e now <= max_ids
-            else:
-                merged.append((cur_s, cur_e))
-                cur_s, cur_e = s, e
-
-        merged.append((cur_s, cur_e))
-        return merged
+        merged_dict = {}
+        for symbol, gaps in gaps_dict.items():
+            if not gaps:
+                merged_dict[symbol] = []
+                continue
+            normalized = [(int(s), int(e)) for s, e in gaps]
+            normalized.sort()
+            merged: List[Tuple[int, int]] = []
+            cur_s, cur_e = normalized[0]
+            for s, e in normalized[1:]:
+                potential_end = max(cur_e, e)
+                if s <= cur_e + merge_distance or (potential_end - cur_s) <= max_ids:
+                    cur_e = potential_end
+                    if (cur_e - cur_s) > max_ids:
+                        while (cur_e - cur_s) > max_ids:
+                            chunk_end = cur_s + max_ids
+                            merged.append((cur_s, chunk_end))
+                            cur_s = chunk_end + 1
+                else:
+                    merged.append((cur_s, cur_e))
+                    cur_s, cur_e = s, e
+            merged.append((cur_s, cur_e))
+            merged_dict[symbol] = merged
+        return merged_dict
 
     # watermark feature removed; gap detection uses table state

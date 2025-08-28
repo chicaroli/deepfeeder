@@ -1,7 +1,6 @@
 # feeders/binance/schema.py
-from functools import lru_cache
-from deephaven import DynamicTableWriter, agg, time_table, empty_table
-from deephaven.table_factory import merge
+import threading
+from deephaven import DynamicTableWriter, agg
 import deephaven.dtypes as dht
 from feeders.bins import bins_recent
 
@@ -39,8 +38,6 @@ _BINANCE_TRADES_DTW = DynamicTableWriter({
 _BINANCE_TAPS = []  # list[callable]
 
 
-
-import threading
 
 class _MirroredWriter:
     def __init__(self, dtw: DynamicTableWriter):
@@ -82,7 +79,6 @@ def binance_trades_table():
     return _BINANCE_TRADES_MIRROR.table
 
 # --- Deduped trades table ---------------------------------------------------
-@lru_cache(maxsize=1)
 def binance_trades_table_deduped():
     """
     Returns a deduplicated version of the Binance trades table,
@@ -93,7 +89,6 @@ def binance_trades_table_deduped():
     deduped = t.sort_descending("Timestamp").drop_duplicates(by=["Symbol", "TradeID"])
     return deduped
 
-@lru_cache(maxsize=1)
 def binance_ohlcv_1m():
     t = _BINANCE_TRADES_DTW.table.update([
         'Timestamp = lowerBin(Timestamp, MINUTE)',
@@ -118,7 +113,6 @@ def binance_ohlcv_1m():
     ]).drop_columns(['PriceQty'])
     return bars.view(list(BINANCE_OHLCV_SCHEMA_COLS))
 
-@lru_cache(maxsize=1)
 def binance_ohlcv_1m_filled():
     """Lightweight recent 1m bars (current + previous) with IsEmpty flag.
 
@@ -133,7 +127,6 @@ def binance_ohlcv_1m_filled():
     filled = grid.natural_join(sparse, on=["Symbol", "Timestamp"]).update_view(["IsEmpty = isNull(Volume)"])
     return filled.view(list(BINANCE_OHLCV_FILLED_SCHEMA_COLS))
 
-@lru_cache(maxsize=1)
 def binance_ohlcv_5m():
     one_m = binance_ohlcv_1m()
     t = one_m.update([
@@ -159,7 +152,6 @@ def binance_ohlcv_5m():
     ]).drop_columns(['T5','PriceQty'])
     return bars.view(list(BINANCE_OHLCV_SCHEMA_COLS))
 
-@lru_cache(maxsize=1)
 def binance_ohlcv_5m_filled():
     """Lightweight recent 5m bars (current + previous) with IsEmpty flag.
 

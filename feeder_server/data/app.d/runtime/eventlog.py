@@ -19,8 +19,25 @@ def emit_event(
 
 	Best-effort: any exception during write is swallowed so callers are not impacted.
 	"""
+	def make_json_safe(obj):
+		if isinstance(obj, dict):
+			return {k: make_json_safe(v) for k, v in obj.items()}
+		elif isinstance(obj, (list, tuple)):
+			return [make_json_safe(v) for v in obj]
+		elif hasattr(obj, 'isoformat'):
+			return obj.isoformat()
+		elif isinstance(obj, (str, int, float, bool)) or obj is None:
+			return obj
+		else:
+			return str(obj)
+
 	try:
 		w = get_eventlog_writer()
+		try:
+			meta_json = json.dumps(make_json_safe(meta or {}), separators=(",", ":"))
+		except Exception as e:
+			meta_json = f"{e}"
+		
 		w.write_row(
 			to_j_instant(datetime.now(timezone.utc)),
 			service,
@@ -29,7 +46,7 @@ def emit_event(
 			level,
 			code,
 			message,
-			json.dumps(meta or {}, separators=(",", ":")),
+			meta_json,
 			corr_id or "",
 			parent_corr_id or "",
 		)

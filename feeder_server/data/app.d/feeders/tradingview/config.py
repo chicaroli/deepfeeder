@@ -31,6 +31,8 @@ class TradingViewConfig:
     # Warm replay settings
     warm_replay_on_start: bool = True
     warm_replay_window_secs: int = 900
+    # Backfill 
+    gapfill_scan_interval: int = 150  # seconds between gap scans
 
 
 def _get_bool(name: str, default: str = "1") -> bool:
