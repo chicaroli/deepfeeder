@@ -63,6 +63,9 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
         self._bars_writer = tv_bars_writer()
         # Journal instance (managed per-feeder)
         self._journal: Optional[TradingViewJournal] = None
+        # Load hot bars from journal on init
+        if self._journal is not None:
+            self._journal.load_hot_bars(writer=self._bars_writer)
         cfg = load_config()
         self._cfg = cfg
         QueueBatchMixin.__init__(self, queue_maxlen=5000)
@@ -118,13 +121,10 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
             emit_event("feeder", f"tradingview:{self.name}", "startup", "ERROR", "WARM_REPLAY_ERR", f"warm replay failed: {e}", {"exc": tb})
             pass
 
-        # Attempt one-time hot-parquet load into the bars table if applicable.
-        try:
-            if not getattr(self, '_hot_replayed', False):
-                self._load_hot_bars()
-        except Exception as e:
-            # Non-fatal: log and continue startup
-            emit_event("feeder", f"tradingview:{self.name}", "startup", "WARN", "HOTLOAD_ERR", f"hot load failed: {e}")
+        # ...existing code...
+        # Load hot bars from journal before starting listener
+        if self._journal is not None:
+            self._journal.load_hot_bars(writer=self._bars_writer)
           
         # Start listener worker
         self.start_writer(self.provider, self.name)
@@ -300,119 +300,4 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
         except Exception:
             pass
 
-    def _load_hot_bars(self) -> None:
-        """Load hot parquet files into the bars table once on startup.
-
-        Emits a HOT_LOAD event at start and end for traceability.
-        """
-        emit_event("feeder", f"tradingview:{self.name}", "startup", "INFO", "HOT_LOAD", "Starting hot file load", {})
-        # Marker path to indicate replay done
-        marker = Path(META_DIR) / f"tv_hot_replayed_{self.name}.flag"
-        # If marker exists, skip
-        if marker.exists():
-            self._hot_replayed = True
-            emit_event("feeder", f"tradingview:{self.name}", "startup", "INFO", "HOT_LOAD", "Hot file load skipped (marker exists)", {})
-            return
-
-        writer = tv_bars_writer()
-        # If the target table already has rows, skip hot-load to avoid duplicates
-        try:
-            t = writer.table
-            table_not_empty = False
-            if hasattr(t, 'size'):
-                table_not_empty = t.size > 0
-            else:
-                # Fallback: try to get one row as pandas
-                try:
-                    table_not_empty = len(t.head(1).to_pandas()) > 0
-                except Exception:
-                    table_not_empty = False
-            if table_not_empty:
-                emit_event("feeder", f"tradingview:{self.name}", "startup", "INFO", "HOT_LOAD", "Hot file load skipped (table not empty)", {})
-                return
-        except Exception:
-            # If we can't introspect the table, proceed conservatively
-            pass
-
-        base = Path(TV_HOT_BARS_DIR)
-        if not base.exists():
-            emit_event("feeder", f"tradingview:{self.name}", "startup", "INFO", "HOT_LOAD", "Hot file load skipped (no hot storage dir)", {})
-            return
-
-        # Discover parquet files under the hot dir
-        try:
-            ds_obj = ds.dataset(str(base), format='parquet', partitioning='hive')
-            table = ds_obj.to_table()
-            df = table.to_pandas()
-        except (OSError, FileNotFoundError, Exception) as e:
-            # reading parquet failed; record stacktrace and skip hot-load
-            tb = traceback.format_exc()
-            emit_event("feeder", f"tradingview:{self.name}", "startup", "ERROR", "HOTLOAD_READ_ERR", f"reading hot parquet failed: {e}", {"exc": tb})
-            return
-
-        if df.empty:
-            # nothing to load
-            try:
-                marker.write_text('no-data')
-            except Exception as e:
-                tb = traceback.format_exc()
-                emit_event("feeder", f"tradingview:{self.name}", "startup", "ERROR", "HOTLOAD_MARKER_ERR", f"writing marker failed: {e}", {"exc": tb})
-            self._hot_replayed = True
-            emit_event("feeder", f"tradingview:{self.name}", "startup", "INFO", "HOT_LOAD", "Hot file load completed (no data)", {})
-            return
-
-        # Use centralized transform helper to normalize parquet rows for Deephaven
-        # Ensure the pandas DF has a `datetime` column expected by df_row_to_dh_row
-        try:
-            if 'timestamp' in df.columns and 'datetime' not in df.columns:
-                df['datetime'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
-            # Normalize exchange/symbol presence
-            if 'exchange' in df.columns:
-                df['exchange'] = df['exchange'].fillna('')
-            if 'symbol' in df.columns:
-                df['symbol'] = df['symbol'].fillna('')
-        except Exception:
-            pass
-
-        # Deduplicate by (exchange, symbol, datetime) keeping last
-        dedup_keys = [k for k in ('exchange', 'symbol', 'datetime') if k in df.columns]
-        if dedup_keys:
-            df = df.sort_values(by=dedup_keys).drop_duplicates(subset=dedup_keys, keep='last')
-
-        # Write rows using the transform helper to ensure consistent mapping
-        written = 0
-        failed = 0
-        last_tb = None
-        for _, row in df.iterrows():
-            try:
-                exch = (row.get('exchange') or '').upper()
-                sym = (row.get('symbol') or '').upper()
-                dh_row = df_row_to_dh_row(exch, sym, row)
-                writer.write_row(
-                    dh_row['exchange'],
-                    dh_row['symbol'],
-                    dh_row['datetime'],
-                    dh_row['open'],
-                    dh_row['high'],
-                    dh_row['low'],
-                    dh_row['close'],
-                    dh_row['volume'],
-                )
-                written += 1
-            except Exception as e:
-                failed += 1
-                last_tb = traceback.format_exc()
-                # continue writing remaining rows
-                continue
-
-        # Mark replay done
-        try:
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text(f'loaded:{written}')
-        except Exception as e:
-            tb = traceback.format_exc()
-            emit_event("feeder", f"tradingview:{self.name}", "startup", "ERROR", "HOTLOAD_MARKER_ERR", f"writing marker failed: {e}", {"exc": tb})
-        # mark in-memory flag
-        self._hot_replayed = True
-        emit_event("feeder", f"tradingview:{self.name}", "startup", "INFO", "HOT_LOAD", f"Hot file load completed: {written} rows written, {failed} failed", {"written": int(written), "failed": int(failed)})
 
