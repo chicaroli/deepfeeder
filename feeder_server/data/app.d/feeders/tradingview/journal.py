@@ -16,7 +16,6 @@ from typing import Any, Optional
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
-import pyarrow.parquet as pq
 
 from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
@@ -43,8 +42,8 @@ class TradingViewJournal:
         name: str,
         role: str = "journal",
         queue_max: int = 10000,
-        batch_size: int = 100,
-        flush_interval: float = 2.0,
+        batch_size: int = 1000,
+        flush_interval: float = 5.0,
         base_dir: Optional[Path] = None,
     ):
         self._q: "queue.Queue[dict]" = queue.Queue(maxsize=queue_max)
@@ -161,11 +160,59 @@ class TradingViewJournal:
                 max_rows_per_file=self.max_rows_per_file or None,
                 max_rows_per_group=self.max_rows_per_group or None,
             )
-            emit_event(self._service, self._name, self._role, "INFO", "JOURNAL_FLUSH", {"rows": int(df.shape[0]), "files_seq": self._file_seq})
+            emit_event(self._service, self._name, self._role, "INFO", "JOURNAL_FLUSH", f"Flushed {int(df.shape[0])} rows, file_seq={self._file_seq}")
         except Exception:
             emit_event(self._service, self._name, self._role, "ERROR", "JOURNAL_FLUSH_ERR", "flush error")
 
+    def compact_layer(self):
+        """Compact and deduplicate all parquet files in the hot bars directory."""
+        try:
+            # Discover all parquet files
+            ds_obj = ds.dataset(str(self._base_dir), format='parquet', partitioning='hive')
+            table = ds_obj.to_table()
+            df = table.to_pandas()
+            if df.empty:
+                emit_event(self._service, self._name, self._role, "INFO", "JOURNAL_COMPACT", "No data to compact")
+                return
+            # Deduplicate by exchange, symbol, timestamp
+            dedup_cols = [c for c in ["exchange", "symbol", "timestamp"] if c in df.columns]
+            if dedup_cols:
+                df = df.sort_values(by=dedup_cols).drop_duplicates(subset=dedup_cols, keep='last')
+            tbl = to_arrow_table(df)
+            epoch_ms = int(time.time() * 1000)
+            basename = f"compact-tv-{epoch_ms}-{{i}}.parquet"
+            ds.write_dataset(
+                data=tbl,
+                base_dir=str(self._base_dir),
+                format="parquet",
+                partitioning=ds.partitioning(self._partition_schema, flavor="hive"),
+                basename_template=basename,
+                existing_data_behavior="overwrite_or_ignore",
+                create_dir=True,
+                max_rows_per_file=self.max_rows_per_file or None,
+                max_rows_per_group=self.max_rows_per_group or None,
+            )
+            emit_event(self._service, self._name, self._role, "INFO", "JOURNAL_COMPACT", f"Compacted {int(df.shape[0])} rows")
+        except Exception as e:
+            emit_event(self._service, self._name, self._role, "ERROR", "JOURNAL_COMPACT_ERR", f"compact error: {e}")
+
+    def run_periodic_compact(self, interval: float = 3600):
+        """Run compact_layer periodically in a background thread."""
+        import threading
+        def _runner():
+            while not self._stop:
+                try:
+                    self.compact_layer()
+                except Exception:
+                    pass
+                time.sleep(interval)
+        t = threading.Thread(target=_runner, daemon=True)
+        t.start()
+        return t
+
     def _run(self, stop_event):
+        # Start periodic compaction thread (default every hour)
+        self._compact_thread = self.run_periodic_compact(interval=3600)
         batch = []
         last_flush = time.time()
         while not stop_event.is_set() and not self._stop:
@@ -200,3 +247,81 @@ class TradingViewJournal:
                 self._flush_batch(batch)
             except Exception:
                 pass
+
+    def load_hot_bars(self, writer=None):
+        """Load hot parquet files into the bars table once on startup. Emits a HOT_LOAD event at start and end for traceability."""
+        emit_event(self._service, self._name, self._role, "INFO", "HOT_LOAD", "Starting hot file load", {})
+        # Always replay hot bars on start; deduplication ensures idempotence
+        if writer is None:
+            from .schema import tv_bars_writer
+            writer = tv_bars_writer()
+        # If the target table already has rows, skip hot-load to avoid duplicates
+        try:
+            t = writer.table
+            table_not_empty = False
+            if hasattr(t, 'size'):
+                table_not_empty = t.size > 0
+            else:
+                try:
+                    table_not_empty = len(t.head(1).to_pandas()) > 0
+                except Exception:
+                    table_not_empty = False
+            if table_not_empty:
+                emit_event(self._service, self._name, self._role, "INFO", "HOT_LOAD", "Hot file load skipped (table not empty)", {})
+                return
+        except Exception:
+            pass
+        base = self._base_dir
+        if not base.exists():
+            emit_event(self._service, self._name, self._role, "INFO", "HOT_LOAD", "Hot file load skipped (no hot storage dir)", {})
+            return
+        try:
+            ds_obj = ds.dataset(str(base), format='parquet', partitioning='hive')
+            table = ds_obj.to_table()
+            df = table.to_pandas()
+        except (OSError, FileNotFoundError, Exception) as e:
+            import traceback
+            tb = traceback.format_exc()
+            emit_event(self._service, self._name, self._role, "ERROR", "HOTLOAD_READ_ERR", f"reading hot parquet failed: {e}", {"exc": tb})
+            return
+        if df.empty:
+            emit_event(self._service, self._name, self._role, "INFO", "HOT_LOAD", "Hot file load completed (no data)", {})
+            return
+        try:
+            if 'timestamp' in df.columns and 'datetime' not in df.columns:
+                df['datetime'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+            if 'exchange' in df.columns:
+                df['exchange'] = df['exchange'].fillna('')
+            if 'symbol' in df.columns:
+                df['symbol'] = df['symbol'].fillna('')
+        except Exception:
+            pass
+        dedup_keys = [k for k in ('exchange', 'symbol', 'datetime') if k in df.columns]
+        if dedup_keys:
+            df = df.sort_values(by=dedup_keys).drop_duplicates(subset=dedup_keys, keep='last')
+        written = 0
+        failed = 0
+        last_tb = None
+        from .transform import df_row_to_dh_row
+        for _, row in df.iterrows():
+            try:
+                exch = (row.get('exchange') or '').upper()
+                sym = (row.get('symbol') or '').upper()
+                dh_row = df_row_to_dh_row(exch, sym, row)
+                writer.write_row(
+                    dh_row['exchange'],
+                    dh_row['symbol'],
+                    dh_row['datetime'],
+                    dh_row['open'],
+                    dh_row['high'],
+                    dh_row['low'],
+                    dh_row['close'],
+                    dh_row['volume'],
+                )
+                written += 1
+            except Exception as e:
+                failed += 1
+                import traceback
+                last_tb = traceback.format_exc()
+                continue
+        emit_event(self._service, self._name, self._role, "INFO", "HOT_LOAD", f"Hot file load completed: {written} rows written, {failed} failed", {"written": int(written), "failed": int(failed)})
