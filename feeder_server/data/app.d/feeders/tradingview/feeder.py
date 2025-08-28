@@ -17,12 +17,9 @@ from feeders.common.queue_batch import QueueBatchMixin
 from .schema import tv_quotes_writer, tv_bars_writer
 from .config import load_config
 from .backfill import TradingViewGapFiller
-from .transform import split_exchange_ticker, to_instant_from_epoch_s, df_row_to_dh_row
+from .transform import split_exchange_ticker, to_instant_from_epoch_s
 from .journal import TradingViewJournal
-from pathlib import Path
-import pyarrow.dataset as ds
-import pandas as pd
-from persistence.paths import TV_HOT_BARS_DIR, META_DIR
+
 
 
 WS_URL = "wss://data.tradingview.com/socket.io/websocket"
@@ -141,6 +138,12 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
         self.gap_filler = TradingViewGapFiller(symbols=symbols_only, exchange=exchanges, journal=self._journal, feeder_name=self.name)
         self.gap_filler.start(dh_table=self._bars_writer.table, scan_interval=self._cfg.gapfill_scan_interval)
 
+        # Use self._sym_meta to extract exchange and symbol lists for gap filler
+        exchanges = [meta[0] for meta in self._sym_meta.values()]
+        symbols_only = [meta[1] for meta in self._sym_meta.values()]
+        self.gap_filler = TradingViewGapFiller(symbols=symbols_only, exchange=exchanges, journal=self._journal, feeder_name=self.name)
+        self.gap_filler.start(dh_table=self._bars_writer.table, scan_interval=self._cfg.gapfill_scan_interval)
+
         return "started"
 
     def stop(self):
@@ -161,6 +164,7 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
             self.listener_worker.join(timeout=3)
         emit_event("feeder", f"tradingview:{self.name}", "listener", "INFO", "STOP", "Feeder stopping")
         self.emit_status(force=True)
+
 
         # Stop the per-feeder journal
         try:
@@ -234,7 +238,7 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
             material = (("lp" in v and v["lp"] is not None) or ("bid" in v and v["bid"] is not None) or ("ask" in v and v["ask"] is not None) or (vol_delta is not None and vol_delta > 0.0))
             if not material:
                 continue
-            # fingerprint could be used for dedup; omitted
+            # Only queue quotes data for quotes writer
             row = (
                 (exch or '').upper(),
                 (tick or '').upper(),
@@ -247,7 +251,6 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
                 st.chp,
                 vol_delta,
             )
-            # dh_row = ws_row_to_dh_row(row)
             try:
                 with self._q_lock:
                     if len(self._q) < self._q.maxlen:

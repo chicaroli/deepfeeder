@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import queue
 import time
+import threading
 from pathlib import Path
-from datetime import datetime
 from typing import Any, Optional
 
 import pandas as pd
@@ -20,8 +20,8 @@ import pyarrow.dataset as ds
 from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
 from persistence.paths import TV_HOT_BARS_DIR
-from .transform import records_to_dataframe, to_arrow_table
-
+from .transform import records_to_dataframe, to_arrow_table, df_row_to_dh_row
+from .schema import tv_bars_writer
 
 
 class TradingViewJournal:
@@ -198,7 +198,7 @@ class TradingViewJournal:
 
     def run_periodic_compact(self, interval: float = 3600):
         """Run compact_layer periodically in a background thread."""
-        import threading
+        
         def _runner():
             while not self._stop:
                 try:
@@ -253,7 +253,7 @@ class TradingViewJournal:
         emit_event(self._service, self._name, self._role, "INFO", "HOT_LOAD", "Starting hot file load", {})
         # Always replay hot bars on start; deduplication ensures idempotence
         if writer is None:
-            from .schema import tv_bars_writer
+            
             writer = tv_bars_writer()
         # If the target table already has rows, skip hot-load to avoid duplicates
         try:
@@ -302,12 +302,13 @@ class TradingViewJournal:
         written = 0
         failed = 0
         last_tb = None
-        from .transform import df_row_to_dh_row
+        
         for _, row in df.iterrows():
             try:
                 exch = (row.get('exchange') or '').upper()
                 sym = (row.get('symbol') or '').upper()
                 dh_row = df_row_to_dh_row(exch, sym, row)
+                # Use only dh_row fields, matching tv_bars_writer schema
                 writer.write_row(
                     dh_row['exchange'],
                     dh_row['symbol'],
