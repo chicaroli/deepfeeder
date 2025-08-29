@@ -7,17 +7,9 @@ only performed via explicit function calls.
 
 import os
 from datetime import datetime, timezone
-import deepfeeder as dfb
-from persistence import ensure_dirs  # type: ignore
-from runtime.eventlog import emit_event  # type: ignore
-
-from runtime.heartbeat import Heartbeater
-from runtime.dh_thread import spawn_dh_thread
-from runtime.consumers import dh_consumer_loop, journal_consumer_loop
 
 
 # --- logging helpers -------------------------------------------------------
-
 def _ts() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -39,70 +31,105 @@ def _log(msg: str, *, name: str = "APP", level: str = "INFO", code: str = "APP_S
         pass
 
 # --- startup environment summary -------------------------------------------
-
+dev_mode = os.getenv("DEEPFEEDER_DEV_MODE", "1") not in ("0", "false", "False")
 autostart_env = os.getenv("DEEPFEEDER_AUTOSTART", "1")
 register_ui_env = os.getenv("DEEPFEEDER_REGISTER_UI", "1")
 
 _log("package imported: use 'import deepfeeder as dfb'", name="IMPORT")
 _log(f"env DEEPFEEDER_AUTOSTART={autostart_env!r} DEEPFEEDER_REGISTER_UI={register_ui_env!r}", name="ENV")
 
-# --- persistence autostart (before feeders) --------------------------------
-
-ensure_dirs()
-journal_autostart_env = os.getenv("DEEPFEEDER_JOURNAL_AUTOSTART", "1")
-if journal_autostart_env not in ("0", "false", "False"):
-    try:
-        msg = dfb.start_journal()
-        _log(f"journal autostart: {msg}", name="PERSIST")
-    except Exception as exc:  # noqa: BLE001
-        _log(f"journal autostart failed: {exc!r}", name="PERSIST", level="ERROR")
-else:
-    _log("journal autostart disabled by environment", name="PERSIST")
-
-# --- optional autostart ----------------------------------------------------
-
-if autostart_env not in ("0", "false", "False"):
-    try:
-        _log("autostart enabled: starting configured feeders...", name="AUTOSTART")
-        result = dfb.feeder_manager.start_all_autostart()
-        _log(f"autostart result: {result}", name="AUTOSTART")
-    except Exception as exc:  # noqa: BLE001 broad so app still loads
-        _log(f"autostart failed: {exc!r}", name="AUTOSTART", level="ERROR")
-else:
-    _log("autostart disabled by environment", name="AUTOSTART")
-
-# --- optional UI registration ----------------------------------------------
-
-if register_ui_env not in ("0", "false", "False"):
-    try:
-        import ui.dashboard  # type: ignore  # side-effect import: registers dashboard
-        FeederDashboard = ui.dashboard.FeederDashboard  # noqa: N816 (framework style)
-        _log("UI dashboard registered (ui.dashboard.FeederDashboard)", name="UI_REGISTER")
-    except Exception as exc:  # noqa: BLE001
-        _log(f"UI dashboard registration skipped (error): {exc!r}", name="UI_REGISTER", level="ERROR")
+   
+# -------------------------------------------------------------------------------
+# --- PRODUCTION MODE -----------------------------------------------------------
+# -------------------------------------------------------------------------------
+if not dev_mode:
+    import deepfeeder as dfb
+    import ui.dashboard 
+    from runtime.eventlog import emit_event
+    from runtime.orchestrator import Orchestrator
+    from runtime.feeder_specs import load_feeder_specs
+    from ingest.factories import make_binance_ws, make_tradingview_ws, make_tradingview_backfill
+    
+    # --- optional UI registration ----
+    if register_ui_env not in ("0", "false", "False"):
         try:
-            from deephaven import ui as _ui  # type: ignore
-            FeederDashboard = _ui.dashboard(  # type: ignore
-                _ui.panel(_ui.text(f"DeepFeeder dashboard failed to load: {exc!r}"), title="DeepFeeder Error")
-            )
-        except Exception:
-            pass
+            FeederDashboard = ui.dashboard.FeederDashboard  # noqa: N816 (framework style)
+            _log("UI dashboard registered (ui.dashboard.FeederDashboard)", name="UI_REGISTER")
+        except Exception as exc:  # noqa: BLE001
+            _log(f"UI dashboard registration skipped (error): {exc!r}", name="UI_REGISTER", level="ERROR")
+    else:
+        _log("UI dashboard registration disabled by environment", name="UI_REGISTER")
+
+
+    # --- autostart orchestrator and consumers ---
+    try:
+        bus      = dfb.get_service("event_bus")
+        outbox   = dfb.get_service("outbox")
+        journal  = dfb.get_service("journal_store")
+        dh_sink  = dfb.get_service("dh_sink")
+
+        orch = Orchestrator(bus=bus, outbox=outbox, journal=journal, dh_sink=dh_sink)
+        orch.start_consumers()
+
+        specs = load_feeder_specs(os.getenv("DEEPFEEDER_FEEDERS_JSON", "app.d/feeders.json"))
+
+        # Register producers per spec
+        for spec in specs:
+            if spec.provider == "binance":
+                orch.register(make_binance_ws(spec, bus))
+                # optional: orch.register(make_binance_backfill(spec, bus))
+            elif spec.provider == "tradingview":
+                orch.register(make_tradingview_ws(spec, bus))
+                orch.register(make_tradingview_backfill(spec, bus))  # final bars
+
+        _log("core runners started (DH & Journal consumers)", name="CORE")
+
+        # Autostart according to your file
+        if autostart_env not in ("0", "false", "False"):
+            try:
+                _log("AUTOSTART enabled: starting configured feeders...", name="AUTOSTART")
+                orch.start_autostart(specs)
+                _log("AUTOSTART completed", name="AUTOSTART")
+            except Exception as exc:  # noqa: BLE001 broad so app still loads
+                _log(f"AUTOSTART failed: {exc!r}", name="AUTOSTART", level="ERROR")
+        else:
+            _log("AUTOSTART disabled by environment", name="AUTOSTART")
+
+    except Exception as exc:
+        _log(f"failed to start core runners: {exc!r}", name="CORE", level="ERROR")
+
 else:
-    _log("UI dashboard registration disabled by environment", name="UI_REGISTER")
+    # -------------------------------------------------------------------------------
+    # --- DEV MODE ------------------------------------------------------------------
+    # -------------------------------------------------------------------------------
+    from sinks.registry import WriterRegistry
+    from sinks.dh_sink import DhSinkDynamic
+    from providers.binance.flattener import flatten_trades as binance_flatten_trades
+    from deephaven import dtypes as dht
+    from deephaven import DynamicTableWriter
+    
+    _DEV_TABLES = {}  # expose in tables() so you can view it
 
+    def _make_dev_binance_trades_writer():
+        # Minimal schema for binance trades
+        cols = {
+            "Provider": dht.string, "Stream": dht.string, "Symbol": dht.string,
+            "TsNanos": dht.long, "Seq": dht.long, "IsFinal": dht.bool_,
+            "Price": dht.double, "Qty": dht.double, "Side": dht.string,
+        }
+        w = DynamicTableWriter(cols)
+        _DEV_TABLES["dev_binance_trades"] = w.table
+        return w
 
-try:
-    bus = dfb.get_service("event_bus")
-    outbox = dfb.get_service("outbox")
-    journal_store = dfb.get_service("journal_store")
-    dh_sink = dfb.get_service("dh_sink")
+    def _make_dh_registry() -> WriterRegistry:
+        reg = WriterRegistry()
 
-    hb_dh  = Heartbeater("feeder", "core", "dh_consumer")
-    hb_jrn = Heartbeater("feeder", "core", "journal_consumer")
+        # Dev-only: register one writer for ("binance","trades")
+        reg.add(
+            provider="binance", stream="trades",
+            writer=_make_dev_binance_trades_writer(),
+            flatten=binance_flatten_trades
+        )
+        return reg
 
-    spawn_dh_thread("feeder","core","dh_consumer", dh_consumer_loop, bus, dh_sink, hb_dh)
-    spawn_dh_thread("feeder","core","journal_consumer", journal_consumer_loop, outbox, journal_store, bus, hb_jrn)
-
-    _log("core runners started (DH & Journal consumers)", name="CORE")
-except Exception as exc:
-    _log(f"failed to start core runners: {exc!r}", name="CORE", level="ERROR")
+    dfb.services.register("dh_sink", lambda: DhSinkDynamic(_make_dh_registry()))
