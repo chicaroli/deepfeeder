@@ -8,14 +8,13 @@ from datetime import datetime, timezone, timedelta
 from deephaven.time import to_j_instant
 
 from feeders.base import BaseFeeder
-from feeders.common.queue_batch import QueueBatchMixin
 from feeders.binance.backfill import BinanceGapFiller
 from runtime.eventlog import emit_event
 from runtime.dh_thread import spawn
 from .schema import binance_trades_writer
 from .config import load_config
 
-class BinanceFeeder(BaseFeeder, QueueBatchMixin):
+class BinanceFeeder(BaseFeeder):
     """Binance trade stream feeder.
 
     Architecture:
@@ -34,14 +33,14 @@ class BinanceFeeder(BaseFeeder, QueueBatchMixin):
     """
 
     def __init__(self, name: str, symbols: List[str]):
-        # Initialize BaseFeeder first (mixin __init__ is called explicitly below)
-        super().__init__('binance', name, symbols)
+        # Load configuration and set on self before initializing BaseFeeder
+        cfg = load_config()
+        self._cfg = cfg
+        # Initialize BaseFeeder (also initializes queue internals)
+        super().__init__('binance', name, symbols, queue_maxlen=10000)
         self._trades_writer = binance_trades_writer()
         self.ws = None
         self.listener_worker = None
-        cfg = load_config()
-        self._cfg = cfg
-        QueueBatchMixin.__init__(self, queue_maxlen=10000)
         self._writer = self._trades_writer
         # Multiple GapFiller workers
         self.gap_fillers = []

@@ -13,7 +13,6 @@ import deepfeeder as dfb
 from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
 from feeders.base import BaseFeeder
-from feeders.common.queue_batch import QueueBatchMixin
 from .schema import tv_quotes_writer, tv_bars_writer
 from .config import load_config
 from .backfill import TradingViewGapFiller
@@ -52,9 +51,13 @@ class _SymState:
         self.chp = None
         self.last_vol = None
 
-class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
+class TradingViewFeeder(BaseFeeder):
+
     def __init__(self, name: str, symbols: List[str]):
-        super().__init__("tradingview", name, symbols)
+        # Load config and set before initializing base
+        cfg = load_config()
+        self._cfg = cfg
+        super().__init__("tradingview", name, symbols, queue_maxlen=5000)
         self.symbols = sorted({s.upper() for s in symbols})
         self.listener_worker = None
         self.writer_worker = None
@@ -66,9 +69,6 @@ class TradingViewFeeder(BaseFeeder, QueueBatchMixin):
         # Load hot bars from journal on init
         if self._journal is not None:
             self._journal.load_hot_bars(writer=self._bars_writer)
-        cfg = load_config()
-        self._cfg = cfg
-        QueueBatchMixin.__init__(self, queue_maxlen=5000)
         # Symbol meta/state
         self._sym_meta: Dict[str, Tuple[Optional[str], str, str]] = {}
         for raw in self.symbols:
