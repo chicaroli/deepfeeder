@@ -11,6 +11,11 @@ import deepfeeder as dfb
 from persistence import ensure_dirs  # type: ignore
 from runtime.eventlog import emit_event  # type: ignore
 
+from runtime.heartbeat import Heartbeater
+from runtime.dh_thread import spawn_dh_thread
+from runtime.consumers import dh_consumer_loop, journal_consumer_loop
+
+
 # --- logging helpers -------------------------------------------------------
 
 def _ts() -> str:
@@ -85,3 +90,19 @@ if register_ui_env not in ("0", "false", "False"):
 else:
     _log("UI dashboard registration disabled by environment", name="UI_REGISTER")
 
+
+try:
+    bus = dfb.get_service("event_bus")
+    outbox = dfb.get_service("outbox")
+    journal_store = dfb.get_service("journal_store")
+    dh_sink = dfb.get_service("dh_sink")
+
+    hb_dh  = Heartbeater("feeder", "core", "dh_consumer")
+    hb_jrn = Heartbeater("feeder", "core", "journal_consumer")
+
+    spawn_dh_thread("feeder","core","dh_consumer", dh_consumer_loop, bus, dh_sink, hb_dh)
+    spawn_dh_thread("feeder","core","journal_consumer", journal_consumer_loop, outbox, journal_store, bus, hb_jrn)
+
+    _log("core runners started (DH & Journal consumers)", name="CORE")
+except Exception as exc:
+    _log(f"failed to start core runners: {exc!r}", name="CORE", level="ERROR")

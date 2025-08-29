@@ -8,6 +8,15 @@ Provides:
 from __future__ import annotations
 from typing import Any, Dict
 
+# --- NEW core/storage/sink services ---------------------------------------
+from core.event_bus import EventBus
+from storage.outbox_duckdb import DuckDbOutbox
+from storage.journal_duckdb import DuckDbJournal
+from sinks.registry import WriterRegistry
+from sinks.dh_sink import DhSinkDynamic
+from sinks.flatteners.binance import flatten_trades as binance_flatten_trades
+from sinks.flatteners.tradingview import flatten_quotes, flatten_ohlcv_1m
+
 from ingest.manager import FeederManager
 from ingest.manager_tables import get_status_table, get_configs_table
 from feeders.binance import (
@@ -45,6 +54,29 @@ import runtime  # convenience namespace
 services = Services()
 services.register("feeder_manager", lambda: FeederManager())
 services.register("journal", lambda: JournalService())
+
+# Register new storage/outbox/eventbus/dh_sink services where available.
+services.register("outbox",  lambda: DuckDbOutbox("hot/outbox.duckdb"))
+services.register("journal_store", lambda: DuckDbJournal("hot/journal.duckdb"))
+services.register("event_bus", lambda: EventBus(services.get("outbox"), max_envelopes=100_000))
+# Wrap your existing DynamicTableWriters here:
+# e.g., writers = {"trades": writer_trades, "quotes": writer_quotes, "ohlcv_1m": writer_ohlcv1m}
+# Provide a factory that returns the dict bound to your real DH writers.
+def _make_dh_writers():
+     reg = WriterRegistry()
+     # TODO: import your table writers and return a dict
+     # Example: per-(provider, stream) registrations
+     # reg.add(provider="binance", stream="trades", writer=binance_trades_writer(), flatten=binance_flatten_trades)
+     # reg.add(provider="tradingview", stream="quotes", writer=tv_quotes_writer(), flatten=flatten_quotes)
+     # reg.add(provider="tradingview", stream="ohlcv_1m", writer=tv_ohlcv1m_writer(), flatten=flatten_ohlcv_1m)
+
+     # If a stream is identical across providers, you can also register a default:
+     # reg.add(stream="ohlcv_1m", writer=generic_ohlcv1m_writer(), flatten=flatten_ohlcv_1m)
+     return reg
+
+services.register("dh_sink", lambda: DhSinkDynamic(_make_dh_writers()))
+
+
 
 def get_service(name: str):
     """Retrieve a service instance by name (lazy)."""
