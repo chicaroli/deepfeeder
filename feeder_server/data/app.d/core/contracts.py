@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 # ---- domain ---------------------------------------------------------------
 
@@ -24,7 +24,7 @@ class Envelope:
 
 def natural_key(t: Tick) -> Tuple:
     # Use seq if present, otherwise timestamp
-    return (t.provider, t.stream, t.symbol, t.seq if t.seq is not None else t.ts_ns)
+    return t.provider, t.stream, t.symbol, t.seq if t.seq is not None else t.ts_ns
 
 # ---- purpose-first interfaces --------------------------------------------
 
@@ -35,7 +35,7 @@ class EventBus(Protocol):
     def ack_dh(self, last_batch_id: int) -> None: ...
     def ack_journal(self, last_batch_id: int) -> None: ...
 
-class Outbox(Protocol):
+class EventStore(Protocol):
     def append(self, env: Envelope) -> None: ...
     def next_from(self, next_batch_id: int, max_n: int) -> List[Envelope]: ...
     def last_committed(self) -> int: ...
@@ -49,3 +49,13 @@ class JournalStore(Protocol):
 
 class DhSink(Protocol):
     def write_envelope(self, env: Envelope) -> None: ...
+
+@runtime_checkable
+class Producer(Protocol):
+    """Minimal contract Orchestrator needs from any feeder/producer."""
+    name: str
+
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
+    def is_alive(self) -> bool: ...
+    def join(self, timeout: Optional[float] = None) -> None: ...

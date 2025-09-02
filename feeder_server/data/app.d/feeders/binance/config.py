@@ -41,7 +41,7 @@ def load_config() -> BinanceConfig:
     return BinanceConfig(
         batch_size=int(os.getenv("DEEPFEEDER_BINANCE_BATCH_SIZE", "10000")),
         flush_interval_s=float(os.getenv("DEEPFEEDER_BINANCE_FLUSH_INTERVAL_S", "1.0")),
-        
+
         metrics_enabled=_get_bool("DEEPFEEDER_BINANCE_METRICS_ENABLED", "1"),
         metrics_interval=float(os.getenv("DEEPFEEDER_BINANCE_METRICS_INTERVAL", "60")),
         metrics_min_q_delta=int(os.getenv("DEEPFEEDER_BINANCE_METRICS_MIN_Q_DELTA", "500")),

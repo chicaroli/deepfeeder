@@ -11,12 +11,12 @@ completions without needing to choose between sparse vs filled.
 from dataclasses import dataclass
 from typing import Callable, Any, Tuple, Optional, Dict
 
-from feeders.binance import (
+from providers.binance import (
     binance_trades_table,
     binance_ohlcv_1m_filled,
     binance_ohlcv_5m_filled,
 )
-import feeders.binance.schema as binance_sch
+import providers.binance.schema as binance_sch
 from feeders.tradingview import (
     tv_quotes_table,
     tv_ohlcv_1m_filled,

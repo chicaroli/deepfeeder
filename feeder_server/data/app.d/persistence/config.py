@@ -70,7 +70,7 @@ def load_config() -> JournalConfig:
         compact_stable_secs=float(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_STABLE_SECS", "10")),
         compact_min_files=int(os.getenv("DEEPFEEDER_JOURNAL_COMPACT_MIN_FILES", "5")),
         master_prefix=os.getenv("DEEPFEEDER_JOURNAL_MASTER_PREFIX", "master-"),
-        
+
     )
 
 

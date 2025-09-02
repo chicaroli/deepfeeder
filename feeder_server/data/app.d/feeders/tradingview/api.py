@@ -1,5 +1,7 @@
-import time, random
-import socket, websocket
+import time
+import random
+import socket
+import websocket
 from typing import Dict
 from threading import Lock
 from contextlib import contextmanager

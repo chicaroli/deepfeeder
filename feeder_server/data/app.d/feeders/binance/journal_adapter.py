@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple, List
 from datetime import datetime, timezone, timedelta
 
 from persistence.paths import BINANCE_HOT_DIR
-from feeders.binance.schema import (
+from providers.binance.schema import (
     binance_trades_writer,
     binance_trades_table,
     register_binance_trades_tap,
@@ -106,11 +106,11 @@ def build_seen(symbol: str, t0: datetime, t1: datetime) -> set[Tuple[str, Option
         filtered = t.where(f"Symbol == '{symbol.upper()}'") \
                     .where(f"Timestamp >= `{t0.isoformat()}` && Timestamp < `{t1.isoformat()}`") \
                     .select_distinct('Symbol', 'TradeID')
-        
+
         arrow_tbl = pa.arrow.to_arrow(filtered)
         symbol_arr = arrow_tbl.column('Symbol')
         tradeid_arr = arrow_tbl.column('TradeID')
-        for s, tid in zip(symbol_arr, tradeid_arr):
+        for s, tid in zip(symbol_arr, tradeid_arr, strict=False):
             sym = str(s).lower()
             trade_id = int(tid) if tid is not None else None
             seen.add((sym, trade_id))

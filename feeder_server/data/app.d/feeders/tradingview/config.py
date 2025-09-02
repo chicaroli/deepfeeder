@@ -31,7 +31,7 @@ class TradingViewConfig:
     # Warm replay settings
     warm_replay_on_start: bool = True
     warm_replay_window_secs: int = 900
-    # Backfill 
+    # Backfill
     gapfill_scan_interval: int = 150  # seconds between gap scans
 
 

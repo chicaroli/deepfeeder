@@ -37,7 +37,7 @@ def emit_event(
 			meta_json = json.dumps(make_json_safe(meta or {}), separators=(",", ":"))
 		except Exception as e:
 			meta_json = f"{e}"
-		
+
 		w.write_row(
 			to_j_instant(datetime.now(timezone.utc)),
 			service,

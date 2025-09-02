@@ -1,6 +1,7 @@
 """Managed threading wrapper that emits standardized heartbeats."""
 from __future__ import annotations
-import threading, traceback
+import threading
+import traceback
 from typing import Callable, Any, Optional
 from .heartbeat import Heartbeater
 

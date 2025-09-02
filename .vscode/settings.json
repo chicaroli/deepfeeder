@@ -1,13 +1,24 @@
 {
   "python.envFile": "${workspaceFolder}/.env",
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+
   "python.testing.unittestEnabled": false,
   "python.testing.pytestEnabled": true,
-  "python.defaultInterpreterPath": "${workspaceFolder}/feeder_client/.venv/bin/python",
-  "terminal.integrated.env.linux": {
-    "PYTHONPATH": "feeder_client/src"
-  },
-  "terminal.integrated.cwd": "${workspaceFolder}/feeder_client",
+  "python.testing.cwd": "${workspaceFolder}",
   "python.testing.pytestArgs": [
-    "feeder_client"
-  ]
+    "feeder_server/data/app.d/tests"
+  ],
+  "python.analysis.extraPaths": [
+    "feeder_server/data/app.d"
+  ],
+
+
+  "terminal.integrated.cwd": "${workspaceFolder}",
+  "terminal.integrated.env.linux": {
+    "PYTHONPATH": "${workspaceFolder}/feeder_server/data/app.d"
+  },
+  "terminal.integrated.env.windows": {
+    "PYTHONPATH": "${workspaceFolder}/feeder_server/data/app.d"
+  },
+  
 }

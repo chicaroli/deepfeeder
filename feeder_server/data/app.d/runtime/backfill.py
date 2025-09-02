@@ -136,7 +136,7 @@ class GapFiller:
             try:
                 # Table safety check
                 if self.dh_table is None:
-                    emit_event("feeder", self._log_key, "gap_detection", "WARN", "NO_TABLE", 
+                    emit_event("feeder", self._log_key, "gap_detection", "WARN", "NO_TABLE",
                             "No Deephaven table attached for server-side gap detection", {})
                     continue
 

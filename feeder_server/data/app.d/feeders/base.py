@@ -57,8 +57,8 @@ class BaseFeeder(ABC):
 		# _cfg is expected to be set by the concrete feeder before calling
 		# this ctor when using the legacy two-step pattern; use getattr so
 		# callers that haven't set _cfg don't crash (they should set it).
-		self._batch_size = getattr(self, '_cfg', None) and getattr(self._cfg, 'batch_size')
-		self._flush_interval_s = getattr(self, '_cfg', None) and getattr(self._cfg, 'flush_interval_s')
+		self._batch_size = getattr(self, '_cfg', None) and self._cfg.batch_size
+		self._flush_interval_s = getattr(self, '_cfg', None) and self._cfg.flush_interval_s
 		# Metrics
 		self._last_flush_ts = 0.0
 		self._avg_handler_ms = 0.0
@@ -209,7 +209,7 @@ class BaseFeeder(ABC):
 					sw.write_row(
 						getattr(self, 'provider', 'unknown'),
 						getattr(self, 'name', 'unknown'),
-						getattr(self, 'is_alive')() if hasattr(self, 'is_alive') else False,
+						self.is_alive() if hasattr(self, 'is_alive') else False,
 						",".join(getattr(self, 'symbols', [])),
 						int(getattr(self, 'msg_count', 0)),
 						getattr(self, 'last_msg_ts', None),

@@ -1,6 +1,6 @@
 # ingest.feeders.providers.tradingview.schema
 import deephaven.dtypes as dht
-from deephaven import DynamicTableWriter, agg, merge    
+from deephaven import DynamicTableWriter, agg, merge
 
 from feeders.bins import bins_recent
 
@@ -16,10 +16,10 @@ TV_OHLCV_SCHEMA_COLS = ("Timestamp", "Exchange", "Symbol", "BarId", "Open", "Hig
 TV_OHLCV_FILLED_SCHEMA_COLS = TV_OHLCV_SCHEMA_COLS + ("IsEmpty",)
 
 __all__ = [
-    'tv_quotes_writer', 
-    'tv_quotes_table', 
-    'tv_bars_writer', 
-    'tv_bars_table', 
+    'tv_quotes_writer',
+    'tv_quotes_table',
+    'tv_bars_writer',
+    'tv_bars_table',
     'tv_bars_table_deduped'
     'tv_ohlcv_1m_from_quotes',
     'tv_ohlcv_1m_filled',

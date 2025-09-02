@@ -94,7 +94,7 @@ class TradingViewJournal:
             pass
         emit_event(self._service, self._name, self._role, "INFO", "JOURNAL_STOP", "journal stopped")
 
-    def journal_bar_nonblocking(self, exchange: Any, symbol: Any, ts: Any, open_p: Any, high: Any, low: Any, close: Any, 
+    def journal_bar_nonblocking(self, exchange: Any, symbol: Any, ts: Any, open_p: Any, high: Any, low: Any, close: Any,
                                 volume: Any) -> None:
         rec = self._row_to_dict(exchange, symbol, ts, open_p, high, low, close, volume)
         try:
@@ -198,7 +198,7 @@ class TradingViewJournal:
 
     def run_periodic_compact(self, interval: float = 3600):
         """Run compact_layer periodically in a background thread."""
-        
+
         def _runner():
             while not self._stop:
                 try:
@@ -253,7 +253,7 @@ class TradingViewJournal:
         emit_event(self._service, self._name, self._role, "INFO", "HOT_LOAD", "Starting hot file load", {})
         # Always replay hot bars on start; deduplication ensures idempotence
         if writer is None:
-            
+
             writer = tv_bars_writer()
         # If the target table already has rows, skip hot-load to avoid duplicates
         try:
@@ -302,7 +302,7 @@ class TradingViewJournal:
         written = 0
         failed = 0
         last_tb = None
-        
+
         for _, row in df.iterrows():
             try:
                 exch = (row.get('exchange') or '').upper()
@@ -320,7 +320,7 @@ class TradingViewJournal:
                     dh_row['volume'],
                 )
                 written += 1
-            except Exception as e:
+            except Exception:
                 failed += 1
                 import traceback
                 last_tb = traceback.format_exc()

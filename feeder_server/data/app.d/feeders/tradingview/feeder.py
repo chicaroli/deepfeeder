@@ -1,7 +1,8 @@
 # ingest.feeders.providers.tradingview.feeder
 from __future__ import annotations
 
-import json, time
+import json
+import time
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timezone, timedelta
 
@@ -125,7 +126,7 @@ class TradingViewFeeder(BaseFeeder):
         # Load hot bars from journal before starting listener
         if self._journal is not None:
             self._journal.load_hot_bars(writer=self._bars_writer)
-          
+
         # Start listener worker
         self.start_writer(self.provider, self.name)
         self.listener_worker = spawn("feeder", f"{self.provider}:{self.name}", "listener", self._run)

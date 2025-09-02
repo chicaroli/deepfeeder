@@ -6,19 +6,19 @@ Provides:
 - live table getters (status, configs, provider data, threads)
 """
 from __future__ import annotations
-import os
 from typing import Any, Dict
 
 # --- NEW core/storage/sink services ---------------------------------------
+from config.paths import PATHS
 from core.event_bus import EventBus
-from storage.outbox_duckdb import DuckDbOutbox
+from storage.eventstore_duckdb import DuckDbEventStore
 from storage.journal_duckdb import DuckDbJournal
 from sinks.registry import WriterRegistry
 from sinks.dh_sink import DhSinkDynamic
 
-from ingest.manager import FeederManager
 from ingest.manager_tables import get_status_table, get_configs_table
-from feeders.binance import (
+
+from providers.binance import (
     binance_trades_table as get_binance_trades_table,
     binance_ohlcv_1m as get_binance_ohlcv_1m_table,
     binance_ohlcv_1m_filled as get_binance_ohlcv_1m_filled_table,
@@ -34,7 +34,6 @@ from feeders.tradingview import (
     tv_ohlcv_1m as get_tv_ohlcv_1m_table,
     tv_ohlcv_5m as get_tv_ohlcv_5m_table,
 )
-from persistence import JournalService, ensure_dirs
 from feeders.bins import bins_recent
 from fanout import get_fanout_stats_table as fanout_get_stats_table
 
@@ -42,11 +41,7 @@ from runtime.threads_bus import get_threads_table
 from runtime.eventlog_bus import get_eventlog_table
 from runtime.services import Services
 
-import atexit
-import signal
-
 # convenience namespace
-import feeders      
 import providers
 import ingest
 import fanout
@@ -55,9 +50,10 @@ import runtime
 
 # --- services container ----------------------------------------------------
 services = Services()
-services.register("outbox",  lambda: DuckDbOutbox("hot/outbox.duckdb"))
-services.register("journal_store", lambda: DuckDbJournal("hot/journal.duckdb"))
-services.register("event_bus", lambda: EventBus(services.get("outbox"), max_envelopes=100_000))
+services.register("event_store", lambda: DuckDbEventStore(str(PATHS.event_store_db)))
+services.register("journal_store", lambda: DuckDbJournal(str(PATHS.journal_db)))
+_es = services.get("event_store")
+services.register("event_bus", lambda es=_es: EventBus(es, max_envelopes=100_000))
 
 # Provide a factory that returns the dict bound to your real DH writers.
 def _make_dh_registry() -> WriterRegistry:
@@ -65,25 +61,25 @@ def _make_dh_registry() -> WriterRegistry:
     # Wrap your existing DynamicTableWriters here:
 
     # TradingView:
-    reg.add(
-        provider="tradingview", 
-        stream="quotes", 
-        writer=feeders.tradingview.schema.tv_quotes_writer(), 
-        flatten=providers.tradingview.flattener.flatten_quotes
-        )
-    reg.add(
-        provider="tradingview", 
-        stream="bars",   
-        writer=feeders.tradingview.schema.tv_bars_writer(),
-        flatten=providers.tradingview.flattener.flatten_ohlcv_1m
-        )
+    # reg.add(
+    #     provider="tradingview",
+    #     stream="quotes",
+    #     writer=feeders.tradingview.schema.tv_quotes_writer(),
+    #     flatten=providers.tradingview.adapter.flatten_quotes
+    #     )
+    # reg.add(
+    #     provider="tradingview",
+    #     stream="bars",
+    #     writer=feeders.tradingview.schema.tv_bars_writer(),
+    #     flatten=providers.tradingview.adapter.flatten_ohlcv_1m
+    #     )
 
     # Binance:
     reg.add(
-        provider="binance", 
-        stream="trades", 
-        writer=feeders.binance.schema.binance_trades_writer(), 
-        flatten=providers.binance.flattener.flatten_trades
+        provider="binance",
+        stream="trades",
+        writer=providers.binance.schema.binance_trades_writer(),
+        flatten=providers.binance.adapter.flatten_trades
         )
 
     return reg
@@ -91,29 +87,15 @@ def _make_dh_registry() -> WriterRegistry:
 services.register("dh_sink", lambda: DhSinkDynamic(_make_dh_registry()))
 
 
+def get_services_container():
+    return services
+
 def get_service(name: str):
-    """Retrieve a service instance by name (lazy)."""
     return services.get(name)
 
-class _ServiceProxy:
-    """Lazy proxy to a named service in the container."""
-    def __init__(self, service_name: str):
-        self._service_name = service_name
-    def _resolve(self):
-        return services.get(self._service_name)
-    def __getattr__(self, item: str):  # delegate attribute access
-        return getattr(self._resolve(), item)
-    def __repr__(self) -> str:  # pragma: no cover - representational
-        return f"<ServiceProxy {self._service_name} -> {self._resolve()!r}>"
-
-# Lazy feeder manager instance
-feeder_manager = _ServiceProxy("feeder_manager")
-
-# Lightweight alias for Deephaven table objects
-Table = Any
 
 # --- table helpers ---------------------------------------------------------
-
+Table = Any
 def tables() -> Dict[str, Table]:
     """Return dict of commonly used live Deephaven tables."""
     return {
@@ -143,12 +125,12 @@ get_fanout_stats_table = fanout_get_stats_table  # type: ignore
 
 __all__ = [
     # Services API
-    "services", "get_service", "feeder_manager",
+    "services", "get_services_container", "get_service",
     # Table getters
     "get_status_table", "get_configs_table", "get_threads_table",
     "get_binance_trades_table", "get_binance_ohlcv_1m_table", "get_binance_ohlcv_1m_filled_table",
     "get_binance_ohlcv_5m_table", "get_binance_ohlcv_5m_filled_table",
-    
+
     "get_tv_quotes_table", "get_tv_bars_table", "get_tv_bars_table_deduped",
     "get_tv_ohlcv_1m_from_quotes",
     "get_tv_ohlcv_1m_filled",
@@ -157,58 +139,9 @@ __all__ = [
 
     # Helpers
     "tables", "get_fanout_stats_table",
-    # Persistence bindings (lazy)
-    "start_journal", "stop_journal", "replay", "purge_hot_partitions",
     # Namespaces
-    "feeders", "ingest", "fanout", "ui",
+    "ingest", "fanout", "ui",
     "runtime",
     # Event log
     "get_eventlog_table",
 ]
-
-# --- persistence convenience funcs (lazy through service container) ---------
-
-def start_journal() -> str:
-    ensure_dirs()
-    return services.get("journal").start()
-
-
-def stop_journal() -> str:
-    return services.get("journal").stop()
-
-
-def replay(provider: str, symbol: str, t0_iso: str, t1_iso: str, exchange: str = None) -> str:
-    return services.get("journal").replay(provider, symbol, t0_iso, t1_iso, exchange=exchange)
-
-
-def purge_hot_partitions(keep_days: int = 14) -> int:
-    return services.get("journal").purge_hot_partitions(keep_days)
-
-
-# Graceful shutdown handlers: attempt to stop feeders and journal on process exit
-def _graceful_shutdown(*_args):
-    try:
-        # Stop all feeders
-        try:
-            feeder_manager.stop_all()
-        except Exception:
-            pass
-        # Stop journal service if running
-        try:
-            stop_journal()
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-
-# Register on interpreter exit
-atexit.register(_graceful_shutdown)
-# Listen for common termination signals
-for sig in (signal.SIGINT, signal.SIGTERM):
-    try:
-        signal.signal(sig, _graceful_shutdown)
-    except Exception:
-        # Some environments (e.g., restricted app containers) may not allow setting signals
-        pass
-

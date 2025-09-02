@@ -3,7 +3,7 @@ services:
     build:
       context: ./feeder_server
       dockerfile: Dockerfile
-    container_name: deepfeeder-dh
+    container_name: deepfeeder-dh-dev
     env_file:
       - .env
     ports:
@@ -17,8 +17,8 @@ services:
         -DAuthHandlers=io.deephaven.auth.AnonymousAuthenticationHandler 
         -Ddeephaven.application.dir=/data/app.d 
         -Ddeephaven.application.enabled=true
-      DEEPFEEDER_REGISTER_UI: "${DEEPFEEDER_REGISTER_UI:-1}"
-      DEEPFEEDER_AUTOSTART: "${DEEPFEEDER_AUTOSTART:-1}"
+      DEEPFEEDER_REGISTER_UI: "${DEEPFEEDER_REGISTER_UI:-0}"
+      DEEPFEEDER_AUTOSTART: "${DEEPFEEDER_AUTOSTART:-0}"
       DEEPFEEDER_REPLAY_ON_START: "${DEEPFEEDER_REPLAY_ON_START:-1}"
       DEEPFEEDER_REPLAY_WINDOW_SECS: "${DEEPFEEDER_REPLAY_WINDOW_SECS:-21600}"
     volumes:
@@ -27,18 +27,18 @@ services:
     networks:
       - eagle_nest
 
-  feeder_client:
-    build:
-      context: ./feeder_client
-      dockerfile: Dockerfile
-    container_name: feeder-client
-    depends_on:
-      - deephaven
-    volumes:
-      - ./:/workspace
-    restart: unless-stopped
-    networks:
-      - eagle_nest
+#  feeder_client:
+#    build:
+#      context: ./feeder_client
+#      dockerfile: Dockerfile
+#    container_name: feeder-client
+#    depends_on:
+#      - deephaven-dev
+#    volumes:
+#      - ./:/workspace
+#    restart: unless-stopped
+#    networks:
+#      - eagle_nest
 
 networks:
   eagle_nest:

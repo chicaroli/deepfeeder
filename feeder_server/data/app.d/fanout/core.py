@@ -4,7 +4,8 @@ MarketFeeder orchestration for subscriptions, snapshots, and replay.
 """
 import pandas as pd
 from typing import Dict, Set, Callable, Optional, Iterable, Tuple
-import time, os
+import time
+import os
 from runtime.heartbeat import Heartbeater
 from runtime.eventlog import emit_event
 from .listener import _SymListener

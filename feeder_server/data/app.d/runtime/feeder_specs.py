@@ -1,16 +1,18 @@
 # app.d/runtime/feeder_specs.py
-from dataclasses import dataclass
-from typing import List
-import json, os
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Any
+import json
 
 @dataclass
 class FeederSpec:
     provider: str
     name: str
-    symbols: List[str]
+    symbols: list[str]
     autostart: bool = False
+    extra: dict[str, Any] = field(default_factory=dict)
 
-def load_feeder_specs(path: str) -> List[FeederSpec]:
+def load_feeder_specs(path: str) -> list[FeederSpec]:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     specs = []

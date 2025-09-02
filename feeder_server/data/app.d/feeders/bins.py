@@ -54,7 +54,7 @@ def bins_recent(period_minutes: int, bars_back: int = 2):
     if bars_back <= 0:
         raise ValueError("bars_back must be positive")
 
-    today = _dt.datetime.utcnow().date()
+    today = _dt.datetime.now(_dt.timezone.utc).date()
     if _RECENT_BINS_CACHE_DAY != today:
         _RECENT_BINS_CACHE.clear()
         _RECENT_BINS_CACHE_DAY = today

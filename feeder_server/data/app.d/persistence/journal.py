@@ -96,7 +96,7 @@ class _Sink:
                 max_rows_per_group=self.max_rows_per_group or None,
             )
             if getattr(self._cfg, "log_flush_enabled", False):
-                emit_event("journal", self.name, "sink", "INFO", "FLUSH", f"wrote batches=1")
+                emit_event("journal", self.name, "sink", "INFO", "FLUSH", "wrote batches=1")
         except Exception as exc:
             emit_event("journal", self.name, "sink", "ERROR", "PARQUET_WRITE", f"flush error: {exc!r}")
 
@@ -345,7 +345,7 @@ class JournalService:
             return datetime.fromisoformat(s).astimezone(timezone.utc)
         except Exception:
             return None
-        
+
     def _iter_parquet(self, base_dir: str, symbol: str, t0: datetime, t1: datetime, exchange: str = None):
         import os
         cur = t0.date()

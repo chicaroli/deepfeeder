@@ -4,7 +4,7 @@
     {
       "label": "Ruff Check",
       "type": "shell",
-      "command": "${workspaceFolder}/feeder_client/.venv/bin/ruff check ./feeder_client",
+      "command": "${workspaceFolder}/.venv/bin/ruff check ./feeder_server",
       "group": "build",
       "presentation": {"reveal": "always"}
     }

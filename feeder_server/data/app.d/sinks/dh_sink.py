@@ -22,5 +22,5 @@ class DhSinkDynamic(DhSink):
                 spec.writer.write_rows(cols)
             else:
                 # fall back to per-row
-                for row in zip(*[cols[c] for c in cols]):
+                for row in zip(*[cols[c] for c in cols], strict=False):
                     spec.writer.write_row(*row)

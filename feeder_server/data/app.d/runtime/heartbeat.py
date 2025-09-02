@@ -5,7 +5,11 @@ registered (still running) heartbeats with a "running" state so that
 `last_heartbeat` and computed `uptime_s` stay current in the threads table.
 """
 from __future__ import annotations
-import json, time, os, threading, weakref
+import json
+import time
+import os
+import threading
+import weakref
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Set

@@ -56,9 +56,9 @@ class BinanceGapFiller(GapFiller):
         else:
             prev_list = arrow_gaps.column('PrevID').to_pylist()
             cur_list = arrow_gaps.column(self.key_column).to_pylist()
-            gaps = [(int(prev_val) + 1, int(cur_val) - 1) for prev_val, cur_val in zip(prev_list, cur_list)]
+            gaps = [(int(prev_val) + 1, int(cur_val) - 1) for prev_val, cur_val in zip(prev_list, cur_list, strict=False)]
         return {self.symbol: gaps}
-    
+
     def build_gaps_table(self, dh_table):
         # Build symbol/exchange filter and select key column
         query = f"Symbol == '{self.symbol}'"
@@ -168,7 +168,7 @@ class BinanceGapFiller(GapFiller):
 
             # nothing to do per-gap; all rows appended to all_rows
 
-            emit_event(f"feeder", f"binance:{self.symbol}", "backfill", "INFO", "BACKFILL_DONE",
+            emit_event("feeder", f"binance:{self.symbol}", "backfill", "INFO", "BACKFILL_DONE",
                        f"Finished Binance backfill for {self.symbol} ids {gap_start}..{gap_end}", {"gap_start": gap_start, "gap_end": gap_end, "requests": requests_made})
 
         return all_rows

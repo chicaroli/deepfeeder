@@ -58,7 +58,7 @@ class TradingViewGapFiller(GapFiller):
         self.interval = interval
         self.writer = tv_bars_writer()
         # Watermark per symbol
-        self.watermarks = {s: None for s in symbols_only}
+        self.watermarks = dict.fromkeys(symbols_only)
         self._journal: Optional[Any] = journal
 
     def _get_existing_timestamps(self, exch_str: str, sym_str: str):
@@ -147,7 +147,7 @@ class TradingViewGapFiller(GapFiller):
             n_bars = min(n_bars, 5000)
             emit_event(
                 "feeder", f"tradingview:{symbol}", "backfill", "INFO", "BACKFILL_INIT",
-                f"Initializing TradingView backfill for {symbol} {exchange} {n_bars} bars", 
+                f"Initializing TradingView backfill for {symbol} {exchange} {n_bars} bars",
                 {"Exchange": exchange, "symbol": symbol, "nbars": n_bars}
                 )
             try:
@@ -160,7 +160,7 @@ class TradingViewGapFiller(GapFiller):
                 if df.empty:
                     emit_event(
                         "feeder", f"tradingview:{symbol}", "backfill", "WARN", "API_EMPTY",
-                        f"No data returned for {symbol} {exchange} {n_bars} bars", 
+                        f"No data returned for {symbol} {exchange} {n_bars} bars",
                         {"Exchange": exchange, "symbol": symbol, "nbars": n_bars}
                     )
                     continue

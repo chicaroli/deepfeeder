@@ -1,39 +1,87 @@
-"""Thread-safe service container for runtime-managed singletons."""
+# app.d/runtime/services.py
 from __future__ import annotations
-from threading import Lock
-from typing import Callable, Any, Dict
+import threading
+from typing import Callable, Dict, Any, Optional, Iterable
+
+Factory = Callable[[], Any]
+CloserNameOrder = ("shutdown", "close", "stop", "flush")  # try in this order
 
 class Services:
-    """Minimal service locator / container."""
     def __init__(self) -> None:
-        self._lock = Lock()
-        self._factories: Dict[str, Callable[[], Any]] = {}
+        self._factories: Dict[str, Factory] = {}
         self._instances: Dict[str, Any] = {}
+        self._construct_order: list[str] = []
+        self._constructing: set[str] = set()
+        self._lock = threading.RLock()
+        self._shutdown_hooks: list[Callable[[], None]] = []
 
-    def register(self, name: str, factory: Callable[[], Any]) -> None:
+    def register(self, key: str, factory_or_instance: Factory | Any) -> None:
         with self._lock:
-            self._factories[name] = factory
+            if callable(factory_or_instance):
+                self._factories[key] = factory_or_instance
+            else:
+                self._instances[key] = factory_or_instance
+                self._construct_order.append(key)
 
-    def get(self, name: str):
+    def get(self, key: str) -> Any:
         with self._lock:
-            if name in self._instances:
-                return self._instances[name]
-            if name not in self._factories:
-                raise KeyError(f"Service '{name}' not registered")
-            inst = self._factories[name]()
-            self._instances[name] = inst
+            if key in self._instances:
+                return self._instances[key]
+            if key not in self._factories:
+                raise KeyError(f"service '{key}' not registered")
+            if key in self._constructing:
+                raise RuntimeError(f"cyclic service construction for '{key}'")
+            factory = self._factories[key]
+            self._constructing.add(key)
+
+        try:
+            inst = factory()  # may recurse into get(); safe because we released the lock
+        finally:
+            with self._lock:
+                self._constructing.discard(key)
+
+        with self._lock:
+            self._instances[key] = inst
+            self._construct_order.append(key)
             return inst
 
-    def has(self, name: str) -> bool:
+    # Peek without constructing
+    def try_get(self, key: str) -> Optional[Any]:
         with self._lock:
-            return name in self._instances or name in self._factories
+            return self._instances.get(key)
 
-    def shutdown(self) -> None:
+    # Optional external hooks to run during shutdown (e.g., orchestrator.stop_consumers)
+    def on_shutdown(self, cb: Callable[[], None]) -> None:
         with self._lock:
-            for obj in list(self._instances.values()):
-                stop = getattr(obj, "stop_all", None) or getattr(obj, "stop", None)
-                if callable(stop):
+            self._shutdown_hooks.append(cb)
+
+    def shutdown(self, *, join: bool = False, timeout: float = 2.0) -> None:
+        # run external hooks first (LIFO)
+        for cb in reversed(self._shutdown_hooks):
+            try:
+                cb()
+            except Exception:
+                pass
+
+        # close instances in reverse construction order
+        for key in reversed(self._construct_order):
+            obj = self._instances.get(key)
+            if obj is None:
+                continue
+            # if it’s a thread-like service and join requested
+            if join and hasattr(obj, "stop") and hasattr(obj, "join"):
+                try:
+                    obj.stop()          # type: ignore[attr-defined]
+                    obj.join(timeout=timeout)  # type: ignore[attr-defined]
+                    continue
+                except Exception:
+                    pass
+            # otherwise try standard closer names
+            for name in CloserNameOrder:
+                fn = getattr(obj, name, None)
+                if callable(fn):
                     try:
-                        stop()
-                    except Exception:  # noqa: BLE001
+                        fn()
+                    except Exception:
                         pass
+                    break

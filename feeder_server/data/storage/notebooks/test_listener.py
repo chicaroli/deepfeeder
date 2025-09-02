@@ -1,5 +1,7 @@
 import deepfeeder as mfb
-import threading, queue, time
+import threading
+import queue
+import time
 import pyarrow as pa
 
 # Background queue for lightweight dict snapshots (not live tables)

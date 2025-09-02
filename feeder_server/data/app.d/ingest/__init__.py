@@ -1,8 +1,8 @@
 # Ingestion layer public API
 from feeders.base import BaseFeeder
-from .manager import FeederManager
+# from ._manager import FeederManager
 
 __all__ = [
     'BaseFeeder',
-    'FeederManager',
+    # 'FeederManager',
 ]
