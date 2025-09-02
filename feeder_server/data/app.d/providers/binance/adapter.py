@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import Dict, List
 from core.contracts import Tick
+from datetime import datetime, timezone
+from deephaven.time import to_j_instant
 
 """
 Binance WebSocket Trade Stream Fields Definition
@@ -58,4 +60,28 @@ def flatten_trades(ticks: List[Tick]) -> Dict[str, List]:
         "Qty":      [t.payload.get("qty") for t in ticks],
         "Side":     [t.payload.get("side") for t in ticks],
         # any Binance-specific columns welcome here
+    }
+
+def flatten_trades_for_dh(ticks: List["Tick"]) -> Dict[str, List]:
+    """
+    Convert Tick -> rowdict matching binance_trades_writer() (10 columns):
+      Event, EventTime, Symbol, TradeId, Price, Qty, BuyerOrderId, SellerOrderId, TradeTime, IsBuyerMaker
+    """
+    def _inst(ns: int):
+        return to_j_instant(datetime.fromtimestamp(ns / 1_000_000_000, tz=timezone.utc))
+
+    return {
+        "Event":          ["trade"] * len(ticks),
+        "EventTime":      [_inst(t.ts_ns) for t in ticks],   # if you have separate event-ts, put it here
+        "Symbol":         [t.symbol for t in ticks],
+        "TradeId":        [int(t.seq) for t in ticks],
+        "Price":          [float(t.payload.get("price", 0.0)) for t in ticks],
+        "Qty":            [float(t.payload.get("qty", 0.0)) for t in ticks],
+        "BuyerOrderId":   [int(t.payload.get("b", 0)) for t in ticks],
+        "SellerOrderId":  [int(t.payload.get("a", 0)) for t in ticks],
+        "TradeTime":      [_inst(t.ts_ns) for t in ticks],
+        "IsBuyerMaker":   [
+            bool(t.payload["m"]) if "m" in t.payload else (t.payload.get("side") == "sell")
+            for t in ticks
+        ],
     }

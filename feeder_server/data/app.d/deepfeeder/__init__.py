@@ -2,7 +2,7 @@
 
 Provides:
 - services container (lazy singletons)
-- feeder_manager lazy proxy (access methods directly)
+- orchestrator service (registered at startup in app.py)
 - live table getters (status, configs, provider data, threads)
 """
 from __future__ import annotations
@@ -79,7 +79,7 @@ def _make_dh_registry() -> WriterRegistry:
         provider="binance",
         stream="trades",
         writer=providers.binance.schema.binance_trades_writer(),
-        flatten=providers.binance.adapter.flatten_trades
+        flatten=providers.binance.adapter.flatten_trades_for_dh
         )
 
     return reg

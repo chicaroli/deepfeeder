@@ -5,11 +5,14 @@ import time
 import random
 import websocket  # websocket-client
 from threading import Event
+import os
 
 from core.contracts import Producer, EventBus, Tick
 from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
 from providers.binance.adapter import trade_json_to_tick  # dict -> Tick
+
+DEBUG_IO = os.getenv("DF_DEBUG_IO", "0") not in ("0", "false", "False")
 
 class BinanceWsProducer(Producer):
     """
@@ -69,7 +72,6 @@ class BinanceWsProducer(Producer):
             return
         now = time.time()
         if force or len(self._batch) >= self.batch_size or (now - self._last_flush) >= self.flush_interval_s:
-            # Publish to EventBus; bus will wrap in Envelope & assign batch_id
             try:
                 self.bus.publish(self._batch)
             finally:
@@ -83,7 +85,6 @@ class BinanceWsProducer(Producer):
             tick = trade_json_to_tick(d)
             self._batch.append(tick)
             self._msg_count += 1
-            # light, time/size-based batching
             self._flush_if_needed(force=False)
             if (self._msg_count % 500) == 0:
                 emit_event("feeder", self.name, "listener", "INFO", "PROGRESS",
@@ -91,6 +92,8 @@ class BinanceWsProducer(Producer):
         except Exception as ex:
             self._last_error = str(ex)
             emit_event("feeder", self.name, "listener", "ERROR", "MSG_ERR", f"Message error: {ex!r}")
+            if DEBUG_IO:
+                print(f"[DF DEBUG] BinanceWsProducer message error name={self.name} err={ex!r}")
 
     def _run(self, stop_event: Event) -> None:
         url = "wss://stream.binance.com:9443/stream?streams=" + "/".join(f"{s.lower()}@trade" for s in self.symbols)
@@ -112,9 +115,10 @@ class BinanceWsProducer(Producer):
                 self._last_error = str(e)
                 emit_event("feeder", self.name, "listener", "ERROR", "WS_LOOP_ERR",
                            f"WebSocket loop error: {e!r}", {"backoff_s": backoff})
+                if DEBUG_IO:
+                    print(f"[DF DEBUG] BinanceWsProducer loop error name={self.name} err={e!r} backoff={backoff}")
             finally:
                 self._ws = None
-                # flush any remaining ticks before sleeping/retry
                 self._flush_if_needed(force=True)
                 if not stop_event.is_set():
                     time.sleep(backoff + random.uniform(0, 0.5))

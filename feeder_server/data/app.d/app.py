@@ -39,7 +39,7 @@ _log(f"env DEEPFEEDER_AUTOSTART={autostart_env!r} DEEPFEEDER_REGISTER_UI={regist
 import deepfeeder as dfb
 import ui.dashboard
 from runtime.eventlog import emit_event
-from runtime.orchestrator import Orchestrator
+from runtime.feed_manager import FeedManager
 from runtime.feeder_specs import load_feeder_specs
 from ingest.factories import make_binance_ws #, make_tradingview_ws, make_tradingview_backfill
 
@@ -57,66 +57,36 @@ else:
 
 # --- autostart orchestrator and consumers ---
 try:
-    from config.paths import PATHS
-    from storage.eventstore_duckdb import DuckDbEventStore
-    from storage.journal_duckdb import DuckDbJournal
-    from core.event_bus import EventBus
-    from sinks.registry import WriterRegistry
-    from sinks.dh_sink import DhSinkDynamic
-    import providers
-
-    # service_container = dfb.get_services_container()
-    # service_container.register("event_store",  lambda: DuckDbEventStore(str(PATHS.event_store_db)))
-    # service_container.register("journal_store", lambda: DuckDbJournal(str(PATHS.journal_db)))
-    # _es = service_container.get("event_store")
-    # service_container.register("event_bus", lambda es=_es: EventBus(es, max_envelopes=100_000))
-
-    # Provide a factory that returns the dict bound to your real DH writers.
-    # def _make_dh_registry() -> WriterRegistry:
-    #     reg = WriterRegistry()
-    #     # Wrap your existing DynamicTableWriters here:
-    #
-    #     # TradingView:
-    #     # reg.add(
-    #     #     provider="tradingview",
-    #     #     stream="quotes",
-    #     #     writer=feeders.tradingview.schema.tv_quotes_writer(),
-    #     #     flatten=providers.tradingview.adapter.flatten_quotes
-    #     #     )
-    #     # reg.add(
-    #     #     provider="tradingview",
-    #     #     stream="bars",
-    #     #     writer=feeders.tradingview.schema.tv_bars_writer(),
-    #     #     flatten=providers.tradingview.adapter.flatten_ohlcv_1m
-    #     #     )
-    #
-    #     # Binance:
-    #     reg.add(
-    #         provider="binance",
-    #         stream="trades",
-    #         writer=providers.binance.schema.binance_trades_writer(),
-    #         flatten=providers.binance.adapter.flatten_trades
-    #     )
-    #
-    #     return reg
-    # service_container.register("dh_sink", lambda: DhSinkDynamic(_make_dh_registry()))
-
     bus         = dfb.get_service("event_bus")
     event_store = dfb.get_service("event_store")
     journal     = dfb.get_service("journal_store")
     dh_sink     = dfb.get_service("dh_sink")
 
-    orch = Orchestrator(bus=bus, event_store=event_store, journal=journal, dh_sink=dh_sink)
-    # orch.start_consumers()
+    # register orchestrator service for UI access
+    fm = FeedManager(bus=bus, event_store=event_store, journal=journal, dh_sink=dh_sink)
+    # register feed manager services (new + legacy alias)
+    try:
+        dfb.services.register("feed_manager", fm)
+        _log("FeedManager service registered (dfb.services.get('feed_manager'))", name="UI_REGISTER")
+    except Exception as e:
+        _log(f"FeedManager service registration skipped (error): {e!r}", name="UI_REGISTER", level="ERROR")
 
-    specs = load_feeder_specs(os.getenv("DEEPFEEDER_FEEDERS_JSON", "/data/storage/notebooks/feeders.json"))
+    fm.start_consumers()  # ensure DH / Journal consumers are running
+    _log("FeedManager consumers started", name="CORE")
+
+
+    specs_path = os.getenv("DEEPFEEDER_FEEDERS_JSON", "/data/storage/notebooks/feeders.json")
+    specs = load_feeder_specs(specs_path)
+    # expose specs path (optional) for UI reload logic
+    try:
+        dfb.services.register("feeder_specs_path", specs_path)
+    except Exception:
+        pass
 
     # Register producers per spec
     for spec in specs:
         if spec.provider == "binance":
-            # orch.register(make_binance_ws(spec, bus))
-            # optional: orch.register(make_binance_backfill(spec, bus))
-            pass
+            fm.register(make_binance_ws(spec, bus))
         elif spec.provider == "tradingview":
             pass
             # orch.register(make_tradingview_ws(spec, bus))
@@ -128,7 +98,7 @@ try:
     if autostart_env not in ("0", "false", "False"):
         try:
             _log("AUTOSTART enabled: starting configured feeders...", name="AUTOSTART")
-            # orch.run_autostart(specs)
+            # fm.start_autostart(specs)
             _log("AUTOSTART completed", name="AUTOSTART")
         except Exception as exc:  # noqa: BLE001 broad so app still loads
             _log(f"AUTOSTART failed: {exc!r}", name="AUTOSTART", level="ERROR")

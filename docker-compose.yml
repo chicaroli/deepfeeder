@@ -17,10 +17,11 @@ services:
         -DAuthHandlers=io.deephaven.auth.AnonymousAuthenticationHandler 
         -Ddeephaven.application.dir=/data/app.d 
         -Ddeephaven.application.enabled=true
-      DEEPFEEDER_REGISTER_UI: "${DEEPFEEDER_REGISTER_UI:-0}"
+      DEEPFEEDER_REGISTER_UI: "${DEEPFEEDER_REGISTER_UI:-1}"
       DEEPFEEDER_AUTOSTART: "${DEEPFEEDER_AUTOSTART:-0}"
       DEEPFEEDER_REPLAY_ON_START: "${DEEPFEEDER_REPLAY_ON_START:-1}"
       DEEPFEEDER_REPLAY_WINDOW_SECS: "${DEEPFEEDER_REPLAY_WINDOW_SECS:-21600}"
+      DF_DEBUG_IO: "${DF_DEBUG_IO:-1}"
     volumes:
       - ./feeder_server/data:/data
     restart: unless-stopped

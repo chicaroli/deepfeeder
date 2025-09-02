@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Set
 from deephaven.time import to_j_instant
 from .threads_bus import get_threads_writer
+from .eventlog import emit_event
 
 @dataclass
 class BeatCtx:
