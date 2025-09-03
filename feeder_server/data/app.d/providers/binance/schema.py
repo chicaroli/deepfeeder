@@ -1,5 +1,5 @@
 # feeders/binance/schema.py
-import threading
+from __future__ import annotations
 from deephaven import DynamicTableWriter, agg
 import deephaven.dtypes as dht
 from feeders.bins import bins_recent
@@ -10,6 +10,7 @@ BINANCE_OHLCV_TIME_COL = "Timestamp"
 BINANCE_OHLCV_SYMBOL_COL = "Symbol"
 BINANCE_OHLCV_SCHEMA_COLS = ("Timestamp", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "Trades", "Vwap", "BuyerMakerCount")
 BINANCE_OHLCV_FILLED_SCHEMA_COLS = BINANCE_OHLCV_SCHEMA_COLS + ("IsEmpty",)
+
 BINANCE_TRADES_TIME_COL = "Timestamp"
 BINANCE_TRADES_SYMBOL_COL = "Symbol"
 BINANCE_TRADES_SCHEMA_COLS = ("Timestamp", "Symbol", "TradeId", "Price", "Quantity", "BuyerID", "SellerID", "IsBuyerMaker")
@@ -21,62 +22,25 @@ __all__ = [
     'BINANCE_TRADES_TIME_COL', 'BINANCE_TRADES_SYMBOL_COL', 'BINANCE_TRADES_SCHEMA_COLS'
 ]
 
-_BINANCE_TRADES_DTW = DynamicTableWriter({
-    'EventType': dht.string,
-    'EventTime': dht.Instant,
-    'Symbol': dht.string,
-    'TradeID': dht.long,
-    'Price': dht.double,
-    'Quantity': dht.double,
-    'BuyerID': dht.long,
-    'SellerID': dht.long,
-    'Timestamp': dht.Instant,
+_TRADES_DTW = DynamicTableWriter({
+    'EventType':    dht.string,
+    'EventTime':    dht.Instant,
+    'Symbol':       dht.string,
+    'TradeID':      dht.long,
+    'Price':        dht.double,
+    'Quantity':     dht.double,
+    'BuyerID':      dht.long,
+    'SellerID':     dht.long,
+    'Timestamp':    dht.Instant,
     'IsBuyerMaker': dht.bool_,
 })
 
-# --- mirrored writer with taps ---------------------------------------------
-_BINANCE_TAPS = []  # list[callable]
-
-
-
-class _MirroredWriter:
-    def __init__(self, dtw: DynamicTableWriter):
-        self._dtw = dtw
-        self._lock = threading.Lock()
-
-    def write_row(self, *args):
-        with self._lock:
-            self._dtw.write_row(*args)
-            # best-effort taps; copy to avoid mutation during iteration
-            for fn in list(_BINANCE_TAPS):
-                try:
-                    fn(*args)
-                except Exception:
-                    pass
-
-    # Bypass taps (used by replay)
-    def write_row_direct(self, *args):
-        with self._lock:
-            self._dtw.write_row(*args)
-
-    @property
-    def table(self):
-        return self._dtw.table
-
-
-_BINANCE_TRADES_MIRROR = _MirroredWriter(_BINANCE_TRADES_DTW)
-
-
-def register_binance_trades_tap(fn):
-    """Register a tap to receive every write_row call arguments."""
-    _BINANCE_TAPS.append(fn)
-
-
 def binance_trades_writer():
-    return _BINANCE_TRADES_MIRROR
+    return _TRADES_DTW
 
 def binance_trades_table():
-    return _BINANCE_TRADES_MIRROR.table
+    return _TRADES_DTW.table
+
 
 # --- Deduped trades table ---------------------------------------------------
 def binance_trades_table_deduped():
@@ -84,13 +48,13 @@ def binance_trades_table_deduped():
     Returns a deduplicated version of the Binance trades table,
     removing duplicate TradeID entries per Symbol.
     """
-    t = _BINANCE_TRADES_DTW.table
+    t = _TRADES_DTW.table
     # Deduplicate by Symbol and TradeID, keeping the latest row (by Timestamp)
     deduped = t.sort_descending("Timestamp").drop_duplicates(by=["Symbol", "TradeID"])
     return deduped
 
 def binance_ohlcv_1m():
-    t = _BINANCE_TRADES_DTW.table.update([
+    t = _TRADES_DTW.table.update([
         'Timestamp = lowerBin(Timestamp, MINUTE)',
         'BuyerMakerCount = IsBuyerMaker ? 1 : 0',
         'PriceQty = Price * Quantity',

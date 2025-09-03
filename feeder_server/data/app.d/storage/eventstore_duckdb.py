@@ -1,10 +1,11 @@
 from __future__ import annotations
 from typing import List
+import threading
 import duckdb
 import pyarrow as pa
 from core.contracts import Envelope, EventStore, Tick
 
-# ---- Arrow codecs (unchanged) ---------------------------------------------
+# ---- Arrow codecs  ----------------------------------------------------------
 def _ticks_to_arrow(ticks: List[Tick]) -> pa.Table:
     return pa.table({
         "provider": [t.provider for t in ticks],
@@ -46,14 +47,15 @@ def _ipc_bytes_to_table(data: bytes) -> pa.Table:
         return reader.read_all()
 
 
-# ---- DuckDB EventStore (sequence-based IDs) -------------------------------
+# ---- DuckDB EventStore (sequence-based IDs) ---------------------------------
 class DuckDbEventStore(EventStore):
     def __init__(self, path: str):
+        self._lock = threading.RLock()
         self.con = duckdb.connect(path)
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
-        # Table without identity — older DuckDB compatible
+        # Tables
         self.con.execute("""
         CREATE TABLE IF NOT EXISTS event_store(
             batch_id     BIGINT PRIMARY KEY,
@@ -69,24 +71,26 @@ class DuckDbEventStore(EventStore):
             last_committed BIGINT
         );
         """)
-        if self.con.execute("SELECT COUNT(*) FROM acks").fetchone()[0] == 0:
+        row = self.con.execute("SELECT COUNT(*) FROM acks").fetchone()
+        if not row or row[0] == 0:
             self.con.execute("INSERT INTO acks VALUES (0)")
         self.con.execute("CREATE INDEX IF NOT EXISTS ix_event_store_batch_id ON event_store(batch_id);")
-
-        # Create or (re)seed the sequence to max(batch_id)+1
+        # --- reseed sequence WITHOUT ALTER (drop + create) ---
         max_id = int(self.con.execute("SELECT COALESCE(MAX(batch_id), 0) FROM event_store").fetchone()[0])
-        start  = max_id + 1
-        # Recreate the sequence to guarantee the next value
-        self.con.execute("DROP SEQUENCE IF EXISTS event_store_seq;")
-        self.con.execute(f"CREATE SEQUENCE event_store_seq START {start};")
+        start = max_id + 1
+        self.con.execute("BEGIN;")
+        try:
+            self.con.execute("DROP SEQUENCE IF EXISTS event_store_seq;")
+            self.con.execute(f"CREATE SEQUENCE event_store_seq START {start};")
+            self.con.execute("COMMIT;")
+        except Exception:
+            self.con.execute("ROLLBACK;")
+            raise
 
-    # Let DuckDB assign the id; return it
     def append(self, env: Envelope) -> int:
         tbl = _ticks_to_arrow(env.rows)
         blob = _table_to_ipc_bytes(tbl)
-
-        # Prefer RETURNING (if supported); otherwise fall back to last_sequence_value()
-        try:
+        with self._lock:
             cur = self.con.execute(
                 "INSERT INTO event_store "
                 "(batch_id, produced_at, first_off, last_off, row_count, payload) "
@@ -95,37 +99,38 @@ class DuckDbEventStore(EventStore):
                 [env.produced_at_ns, env.first_offset or -1, env.last_offset or -1, len(env.rows), blob],
             )
             batch_id = int(cur.fetchone()[0])
-        except Exception:
-            # Fallback path for very old DuckDB without RETURNING
-            self.con.execute(
-                "INSERT INTO event_store "
-                "(batch_id, produced_at, first_off, last_off, row_count, payload) "
-                "VALUES (nextval('event_store_seq'), to_timestamp(?/1e9), ?, ?, ?, ?)",
-                [env.produced_at_ns, env.first_offset or -1, env.last_offset or -1, len(env.rows), blob],
-            )
-            batch_id = int(self.con.execute("SELECT last_sequence_value('event_store_seq')").fetchone()[0])
-
         return batch_id
 
     def next_from(self, next_batch_id: int, max_n: int) -> List[Envelope]:
-        rows = self.con.execute(
-            "SELECT batch_id, extract(epoch FROM produced_at)*1e9::BIGINT, first_off, last_off, payload "
-            "FROM event_store WHERE batch_id >= ? ORDER BY batch_id LIMIT ?",
-            [next_batch_id, max_n],
-        ).fetchall()
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT batch_id, extract(epoch FROM produced_at)*1e9::BIGINT, first_off, last_off, payload "
+                "FROM event_store WHERE batch_id >= ? ORDER BY batch_id LIMIT ?",
+                [next_batch_id, max_n],
+            ).fetchall()
         envs: List[Envelope] = []
         for b, ns, f, l, blob in rows:
             tbl = _ipc_bytes_to_table(blob)
-            envs.append(Envelope(
-                int(b), int(ns),
-                None if int(f) < 0 else int(f),
-                None if int(l) < 0 else int(l),
-                _arrow_to_ticks(tbl)
-            ))
+            envs.append(Envelope(int(b), int(ns),
+                                 None if int(f) < 0 else int(f),
+                                 None if int(l) < 0 else int(l),
+                                 _arrow_to_ticks(tbl)))
         return envs
 
     def last_committed(self) -> int:
-        return int(self.con.execute("SELECT last_committed FROM acks").fetchone()[0])
+        with self._lock:
+            row = self.con.execute("SELECT last_committed FROM acks LIMIT 1").fetchone()
+        if not row or row[0] is None:
+            return 0
+        return int(row[0])
 
     def mark_committed(self, batch_id: int) -> None:
-        self.con.execute("UPDATE acks SET last_committed = ?", [int(batch_id)])
+        with self._lock:
+            self.con.execute("UPDATE acks SET last_committed = ?", [int(batch_id)])
+
+    def max_batch_id(self) -> int:
+        with self._lock:
+            row = self.con.execute("SELECT max(batch_id) FROM event_store").fetchone()
+        if not row or row[0] is None:
+            return 0
+        return int(row[0])

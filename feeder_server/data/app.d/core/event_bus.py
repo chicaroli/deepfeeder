@@ -2,9 +2,7 @@ import time
 import threading as th
 from collections import deque
 from .contracts import EventBus as EventBusProto, EventStore, Envelope, Tick
-import os
 
-DEBUG_IO = os.getenv("DF_DEBUG_IO", "0") not in ("0", "false", "False")
 
 class EventBus(EventBusProto):
     """
@@ -17,37 +15,15 @@ class EventBus(EventBusProto):
         self._event_store = event_store
         self._buf = deque()              # in-memory ring of Envelopes
         self._max = max_envelopes
-        # Seed next id from persistent store if method exists (restart safety)
-        seed = 0
-        try:
-            if hasattr(event_store, "max_batch_id"):
-                seed = int(getattr(event_store, "max_batch_id")())  # type: ignore[call-arg]
-        except Exception:
-            seed = 0
-        self._next_id = seed  # first publish will ++ before assign
         self._lock = th.RLock()
         self._cv = th.Condition(self._lock)
         self._dh_cursor = -1
-        # If acks table was reset, last_committed may be lower than seed; that's OK
         self._jr_cursor = event_store.last_committed()
-        if self._jr_cursor > self._next_id:
-            # pathological, but keep invariant _next_id >= jr_cursor
-            self._next_id = self._jr_cursor
-        if DEBUG_IO:
-            print(f"[DF DEBUG] EventBus seeded next_id from store seed={seed} jr_cursor={self._jr_cursor}")
-
 
     def publish(self, rows: list[Tick]) -> int:
         produced_ns = time.time_ns()
-        # Build env without an id; DB will assign one
-        env = Envelope(
-            batch_id=-1,
-            produced_at_ns=produced_ns,
-            first_offset=None,
-            last_offset=None,
-            rows=rows,
-        )
         # Persist first; fetch DB-assigned id
+        env = Envelope(batch_id=-1, produced_at_ns=produced_ns, first_offset=None, last_offset=None, rows=rows)
         batch_id = self._event_store.append(env)
         env = Envelope(
             batch_id=batch_id,
@@ -59,7 +35,6 @@ class EventBus(EventBusProto):
 
         with self._lock:
             self._buf.append(env)
-
             # bounded ring eviction (only if both drains have passed head)
             while self._buf and len(self._buf) > self._max:
                 head = self._buf[0]
@@ -67,11 +42,7 @@ class EventBus(EventBusProto):
                     self._buf.popleft()
                 else:
                     break
-
             self._cv.notify_all()
-
-        if DEBUG_IO:
-            print(f"[DF DEBUG] EventBus published batch_id={batch_id} rows={len(rows)}")
 
         return batch_id
 
