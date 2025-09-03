@@ -14,7 +14,7 @@ import deepfeeder as dfb
 from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
 from feeders.base import BaseFeeder
-from .schema import tv_quotes_writer, tv_bars_writer
+from providers.tradingview.schema import tv_quotes_writer, tv_bars_writer
 from .config import load_config
 from .backfill import TradingViewGapFiller
 from .transform import split_exchange_ticker, to_instant_from_epoch_s

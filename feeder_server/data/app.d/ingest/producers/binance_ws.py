@@ -86,7 +86,7 @@ class BinanceWsProducer(Producer):
             self._batch.append(tick)
             self._msg_count += 1
             self._flush_if_needed(force=False)
-            if (self._msg_count % 500) == 0:
+            if (self._msg_count % 100000) == 0:
                 emit_event("feeder", self.name, "listener", "INFO", "PROGRESS",
                            f"Received {self._msg_count} messages")
         except Exception as ex:

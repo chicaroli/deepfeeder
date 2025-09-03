@@ -21,7 +21,7 @@ from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
 from persistence.paths import TV_HOT_BARS_DIR
 from .transform import records_to_dataframe, to_arrow_table, df_row_to_dh_row
-from .schema import tv_bars_writer
+from providers.tradingview.schema import tv_bars_writer
 
 
 class TradingViewJournal:

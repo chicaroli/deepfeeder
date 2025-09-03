@@ -2,7 +2,7 @@
 from __future__ import annotations
 from deephaven import DynamicTableWriter, agg
 import deephaven.dtypes as dht
-from feeders.bins import bins_recent
+from providers.bins import bins_recent
 
 
 # --- Unified Schema metadata (exported) ---

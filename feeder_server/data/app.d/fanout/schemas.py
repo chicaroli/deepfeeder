@@ -21,7 +21,7 @@ from feeders.tradingview import (
     tv_quotes_table,
     tv_ohlcv_1m_filled,
 )
-import feeders.tradingview.schema as tv_sch
+import providers.tradingview.schema as tv_sch
 
 
 @dataclass(frozen=True)

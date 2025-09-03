@@ -13,7 +13,7 @@ from runtime.backfill import GapFiller
 from runtime.eventlog import emit_event
 from .transform import df_row_to_dh_row
 from .api import fetch_tv_data
-from .schema import tv_bars_writer
+from providers.tradingview.schema import tv_bars_writer
 
 
 

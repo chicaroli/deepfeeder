@@ -87,9 +87,10 @@ previous bars (default 2 total: current + previous). This dramatically reduces t
 churn and memory footprint while still supporting forced completion of the last bar.
 
 ```python
-from feeders.bins import bins_recent
-recent_1m = bins_recent(1, 2)   # current + previous minute
-recent_5m = bins_recent(5, 2)   # current + previous 5-minute window
+from providers.bins import bins_recent
+
+recent_1m = bins_recent(1, 2)  # current + previous minute
+recent_5m = bins_recent(5, 2)  # current + previous 5-minute window
 ```
 
 Need a longer short-term window (e.g. last hour of 5m bins)?

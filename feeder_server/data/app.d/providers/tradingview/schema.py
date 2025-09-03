@@ -1,8 +1,8 @@
-# ingest.feeders.providers.tradingview.schema
+# providers.tradingview.schema
 import deephaven.dtypes as dht
 from deephaven import DynamicTableWriter, agg, merge
 
-from feeders.bins import bins_recent
+from providers.bins import bins_recent
 
 # --- Schema metadata (exported) ---
 TV_QUOTES_TIME_COL = "LpTime"
@@ -20,7 +20,7 @@ __all__ = [
     'tv_quotes_table',
     'tv_bars_writer',
     'tv_bars_table',
-    'tv_bars_table_deduped'
+    'tv_bars_table_deduped',
     'tv_ohlcv_1m_from_quotes',
     'tv_ohlcv_1m_filled',
     'tv_ohlcv_1m',
@@ -36,63 +36,64 @@ __all__ = [
     ]
 
 # ---------- Primary Tables Writer Definitions ----------------------------------------
-_TV_QUOTES_DTW = DynamicTableWriter({
-    'Exchange': dht.string,
-    'Symbol': dht.string,
-    'LpTime': dht.Instant,
-    'LastPrice': dht.double,
-    'Bid': dht.double,
-    'Ask': dht.double,
-    'Volume': dht.double,
-    'Change': dht.double,
-    'ChangePct': dht.double,
-    'VolDelta': dht.double,
+_QUOTES_DTW = DynamicTableWriter({
+    'Exchange':     dht.string,
+    'Symbol':       dht.string,
+    'LpTime':       dht.Instant,
+    'LastPrice':    dht.double,
+    'Bid':          dht.double,
+    'Ask':          dht.double,
+    'Volume':       dht.double,
+    'Change':       dht.double,
+    'ChangePct':    dht.double,
+    'VolDelta':     dht.double,
 })
 
-_TV_BARS_DTW = DynamicTableWriter({
-    'Exchange': dht.string,
-    'Symbol': dht.string,
-    'Timestamp': dht.Instant,
-    'Open': dht.double,
-    'High': dht.double,
-    'Low': dht.double,
-    'Close': dht.double,
-    'Volume': dht.double,
+_BARS_DTW = DynamicTableWriter({
+    'Exchange':     dht.string,
+    'Symbol':       dht.string,
+    'Timestamp':    dht.Instant,
+    'Open':         dht.double,
+    'High':         dht.double,
+    'Low':          dht.double,
+    'Close':        dht.double,
+    'Volume':       dht.double,
 })
 
 
 # ----------- Tables Writers / Tables Getters -------------------------------
 def tv_quotes_writer():
-    return _TV_QUOTES_DTW
+    return _QUOTES_DTW
 
 def tv_quotes_table():
-    return _TV_QUOTES_DTW.table
+    return _QUOTES_DTW.table
 
 def tv_bars_writer():
-    return _TV_BARS_DTW
+    return _BARS_DTW
 
 
 # ----------- Derived Tables Contructors ------------------------------------
-_TV_BARS_TABLE = _TV_BARS_DTW.table.update([
+_BARS_TABLE = _BARS_DTW.table.update([
         "Exchange = Exchange.toUpperCase()",
         "Symbol = Symbol.toUpperCase()",
     ])
 
 def tv_bars_table():
-    return _TV_BARS_TABLE
+    return _BARS_TABLE
 
-_TV_BARS_DEDUPED_TABLE = (_TV_BARS_TABLE
+_BARS_DEDUPED_TABLE = (
+    _BARS_TABLE
     .sort(['Exchange', 'Symbol', 'Timestamp'])
     .last_by(['Exchange', 'Symbol', 'Timestamp'])
-    )
+)
 
 def tv_bars_table_deduped():
-    return _TV_BARS_DEDUPED_TABLE
+    return _BARS_DEDUPED_TABLE
 
 
 # ----------- Bars From Quotes ---------------------------------------------
-_TV_BARS_FROM_QUOTES = (
-    _TV_QUOTES_DTW.table
+_BARS_FROM_QUOTES = (
+    _QUOTES_DTW.table
     .update([
         'Timestamp = lowerBin(LpTime, MINUTE)',
         'PriceQty = LastPrice * VolDelta',
@@ -115,14 +116,14 @@ _TV_BARS_FROM_QUOTES = (
     )
 
 def tv_ohlcv_1m_from_quotes():
-    return _TV_BARS_FROM_QUOTES
+    return _BARS_FROM_QUOTES
 
 
 def _build_tv_bars_from_quotes_filled():
     """Lightweight recent 1m OHLCV (current + previous) with IsEmpty flag.
     Switched from full-day ``bins_today`` to minimal rolling window ``bins_recent``.
     """
-    sparse = _TV_BARS_FROM_QUOTES
+    sparse = _BARS_FROM_QUOTES
     symbols = sparse.where("Timestamp >= lowerBin(now(), DAY)").select_distinct(["Exchange", "Symbol"])
     bins = bins_recent(1, 2)
     grid = symbols.join(bins)
@@ -131,10 +132,10 @@ def _build_tv_bars_from_quotes_filled():
     ])
     return filled.view(list(TV_OHLCV_FILLED_SCHEMA_COLS))
 
-_TV_BARS_FROM_QUOTES_FILLED = _build_tv_bars_from_quotes_filled()
+_BARS_FROM_QUOTES_FILLED = _build_tv_bars_from_quotes_filled()
 
 def tv_ohlcv_1m_filled():
-    return _TV_BARS_FROM_QUOTES_FILLED
+    return _BARS_FROM_QUOTES_FILLED
 
 
 
@@ -143,10 +144,10 @@ def tv_ohlcv_1m_filled():
 def _build_tv_ohlcv_1m():
     quotes_1m = (
         # _TV_BARS_FROM_QUOTES_FILLED
-        _TV_BARS_FROM_QUOTES
+        _BARS_FROM_QUOTES
         .view(['Exchange', 'Symbol', 'Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
         )
-    bars_last = _TV_BARS_DEDUPED_TABLE.agg_by(aggs=[agg.max_("LastBarTs=Timestamp")], by=["Exchange", "Symbol"])
+    bars_last = _BARS_DEDUPED_TABLE.agg_by(aggs=[agg.max_("LastBarTs=Timestamp")], by=["Exchange", "Symbol"])
     quotes_after_cutoff = (
         quotes_1m
             .natural_join(bars_last, on=["Exchange", "Symbol"], joins=["LastBarTs"])
@@ -154,21 +155,21 @@ def _build_tv_ohlcv_1m():
             .drop_columns("LastBarTs")
     )
     stitched_bars = (
-        merge([_TV_BARS_DEDUPED_TABLE, quotes_after_cutoff])
+        merge([_BARS_DEDUPED_TABLE, quotes_after_cutoff])
         .update_view([
             'BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / MINUTE)',
             ])
         )
     return stitched_bars
 
-_TV_OHLCV_1M = _build_tv_ohlcv_1m()
+_OHLCV_1M = _build_tv_ohlcv_1m()
 
 def tv_ohlcv_1m():
-    return _TV_OHLCV_1M
+    return _OHLCV_1M
 
 # RT OHLCV 5M
-_TV_OHLCV_5M = (
-    _TV_OHLCV_1M
+_OHLCV_5M = (
+    _OHLCV_1M
     .update([
         'Timestamp = lowerBin(Timestamp, (5 * MINUTE))',
     ])
@@ -186,4 +187,4 @@ _TV_OHLCV_5M = (
 )
 
 def tv_ohlcv_5m():
-    return _TV_OHLCV_5M
+    return _OHLCV_5M

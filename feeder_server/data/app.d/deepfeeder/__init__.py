@@ -34,7 +34,7 @@ from feeders.tradingview import (
     tv_ohlcv_1m as get_tv_ohlcv_1m_table,
     tv_ohlcv_5m as get_tv_ohlcv_5m_table,
 )
-from feeders.bins import bins_recent
+from providers.bins import bins_recent
 from fanout import get_fanout_stats_table as fanout_get_stats_table
 
 from runtime.threads_bus import get_threads_table

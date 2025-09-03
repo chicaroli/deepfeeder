@@ -42,9 +42,9 @@ def trade_json_to_tick(msg: dict) -> Tick:
         ts_ns=int(msg["T"]) * 1_000_000,
         seq=int(msg["t"]),
         payload={
-            "price": float(msg["p"]),
-            "qty":   float(msg["q"]),
-            "side":  "sell" if msg.get("m") else "buy",
+            "Price": float(msg["p"]),
+            "Quantity": float(msg["q"]),
+            "IsBuyerMaker": bool(msg.get("m", False)),
         },
         is_final=True,
     )
@@ -56,10 +56,9 @@ def flatten_trades(ticks: List[Tick]) -> Dict[str, List]:
         "Symbol":   [t.symbol for t in ticks],
         "TsNanos":  [t.ts_ns for t in ticks],
         "TradeId":  [t.seq for t in ticks],   # Binance sequence is true tradeId
-        "Price":    [t.payload.get("price") for t in ticks],
-        "Qty":      [t.payload.get("qty") for t in ticks],
-        "Side":     [t.payload.get("side") for t in ticks],
-        # any Binance-specific columns welcome here
+        "Price":    [t.payload.get("Price") for t in ticks],
+        "Quantity": [t.payload.get("Quantity") for t in ticks],
+        "IsBuyerMaker": [t.payload.get("IsBuyerMaker", False) for t in ticks],
     }
 
 def flatten_trades_for_dh(ticks: List["Tick"]) -> Dict[str, List]:
@@ -72,16 +71,13 @@ def flatten_trades_for_dh(ticks: List["Tick"]) -> Dict[str, List]:
 
     return {
         "EventType":    ["trade"] * len(ticks),
-        "EventTime":    [_inst(t.ts_ns) for t in ticks],   # if you have separate event-ts, put it here
+        "EventTime":    [_inst(t.ts_ns) for t in ticks],
         "Symbol":       [t.symbol for t in ticks],
         "TradeID":      [int(t.seq) for t in ticks],
-        "Price":        [float(t.payload.get("price", 0.0)) for t in ticks],
-        "Quantity":     [float(t.payload.get("qty", 0.0)) for t in ticks],
+        "Price":        [float(t.payload.get("Price", 0.0)) for t in ticks],
+        "Quantity":     [float(t.payload.get("Quantity", 0.0)) for t in ticks],
         "BuyerID":      [int(t.payload.get("b", 0)) for t in ticks],
         "SellerID":     [int(t.payload.get("a", 0)) for t in ticks],
         "Timestamp":    [_inst(t.ts_ns) for t in ticks],
-        "IsBuyerMaker": [
-            bool(t.payload["m"]) if "m" in t.payload else (t.payload.get("side") == "sell")
-            for t in ticks
-        ],
+        "IsBuyerMaker": [t.payload.get("IsBuyerMaker", False) for t in ticks],
     }

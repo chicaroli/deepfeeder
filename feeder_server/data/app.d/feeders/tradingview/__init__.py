@@ -1,5 +1,5 @@
 from .feeder import TradingViewFeeder
-from .schema import (
+from providers.tradingview.schema import (
     tv_quotes_writer,
     tv_quotes_table,
     tv_bars_writer,
