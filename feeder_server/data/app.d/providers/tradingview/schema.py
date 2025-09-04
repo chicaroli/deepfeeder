@@ -1,4 +1,4 @@
-# providers.tradingview.schema
+# providers/tradingview/schema.py
 import deephaven.dtypes as dht
 from deephaven import DynamicTableWriter, agg, merge
 

@@ -1,3 +1,4 @@
+# deepfeeder/__init__.py
 """Public API for deepfeeder in Deephaven app-mode.
 
 Provides:

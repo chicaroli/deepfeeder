@@ -1,3 +1,4 @@
+# filepath: feeder_client/src/bots/trading_bot.py
 """
 TradingBot using DeephavenConnector for table subscription and event handling.
 """

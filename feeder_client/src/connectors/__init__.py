@@ -1,3 +1,4 @@
+# filepath: feeder_client/src/connectors/__init__.py
 # This file initializes the connectors package. It can be used to define what is exported from the package.
 
 from .deephaven_connector import DeephavenConnector, FeedListener

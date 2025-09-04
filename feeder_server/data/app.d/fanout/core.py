@@ -1,3 +1,4 @@
+# fanout/core.py
 """
 core.py
 MarketFeeder orchestration for subscriptions, snapshots, and replay.

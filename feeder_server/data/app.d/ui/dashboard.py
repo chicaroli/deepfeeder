@@ -1,3 +1,4 @@
+# ui/dashboard.py
 """Dashboard composition module.
 
 This orchestrates the modular UI pieces (controls, status panel, event log

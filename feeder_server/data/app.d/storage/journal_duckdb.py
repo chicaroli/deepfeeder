@@ -1,3 +1,4 @@
+# storage/journal_duckdb.py
 from __future__ import annotations
 from typing import List, Optional
 import duckdb

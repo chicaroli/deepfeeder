@@ -1,3 +1,4 @@
+# persistence/adapters.py
 """Provider journal adapters registry and discovery.
 
 Providers can supply a module ``feeders.<name>.journal_adapter`` exposing:

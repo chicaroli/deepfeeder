@@ -1,4 +1,4 @@
-# app.d/tests/binance_event_bus_smoke.py
+# tests/core/binance_event_bus_smoke.py
 from __future__ import annotations
 from typing import List, Dict, Optional
 

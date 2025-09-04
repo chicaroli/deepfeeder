@@ -1,4 +1,4 @@
-# app.d/sinks/registry.py
+# sinks/registry.py
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Tuple, Optional, List

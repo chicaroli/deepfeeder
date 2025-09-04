@@ -1,3 +1,4 @@
+# filepath: feeder_server/data/storage/notebooks/tests/duckdb/test_event_store.py
 # --- EventStore smoke test (run in Deephaven UI) --------------------------
 import time, duckdb
 import deepfeeder as dfb

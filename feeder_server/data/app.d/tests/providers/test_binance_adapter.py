@@ -1,3 +1,4 @@
+# tests/providers/test_binance_adapter.py
 import pytest
 from providers.binance.adapter import flatten_trades, trade_json_to_tick
 from core.contracts import Tick

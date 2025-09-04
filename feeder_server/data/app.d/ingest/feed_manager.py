@@ -1,4 +1,4 @@
-# app.d/runtime/feed_manager.py
+# ingest/feed_manager.py
 from __future__ import annotations
 from typing import List, Dict, Optional, Iterable
 from core.contracts import EventBus, DhSink, JournalStore, EventStore, Producer

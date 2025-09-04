@@ -1,3 +1,4 @@
+# core/contracts.py
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable

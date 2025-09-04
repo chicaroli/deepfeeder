@@ -8,7 +8,7 @@ Non-blocking version:
 from __future__ import annotations
 import deepfeeder as df
 from typing import List, Tuple
-
+from typing import List
 PROVIDER = "binance"
 SCHEMA = "ohlcv_1m"   # or "trades"
 SYMBOL = "BTCUSDT"

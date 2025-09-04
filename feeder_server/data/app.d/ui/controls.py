@@ -1,3 +1,5 @@
+# ui/controls.py
+
 """Feeder lifecycle controls component.
 
 Exports a `feeder_controls` ui.component providing start/stop actions.

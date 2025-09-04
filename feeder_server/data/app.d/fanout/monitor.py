@@ -1,3 +1,4 @@
+# fanout/monitor.py
 """fanout.monitor
 
 Stats table materializer (renamed from control) for MarketFeeder.

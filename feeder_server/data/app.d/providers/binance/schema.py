@@ -1,4 +1,4 @@
-# feeders/binance/schema.py
+# providers/binance/schema.py
 from __future__ import annotations
 from deephaven import DynamicTableWriter, agg
 import deephaven.dtypes as dht

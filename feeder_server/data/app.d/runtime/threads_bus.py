@@ -1,3 +1,4 @@
+# runtime/threads_bus.py
 """Threads / services control-plane DynamicTableWriter and accessors.
 
 Each heartbeat or lifecycle event appends a row keyed by (service, name, role).

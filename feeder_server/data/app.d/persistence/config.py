@@ -1,3 +1,5 @@
+# persistence/config.py
+
 """Journal configuration module.
 
 Provides a typed config with environment-driven defaults, mirroring feeder configs.

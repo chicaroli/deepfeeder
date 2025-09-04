@@ -1,3 +1,4 @@
+# fanout/schemas.py
 """
 schemas.py
 Schema registry and provider table imports for MarketFeeder.

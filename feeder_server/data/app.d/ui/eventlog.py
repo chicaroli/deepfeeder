@@ -1,3 +1,5 @@
+# ui/eventlog.py
+
 """Event log UI helpers.
 
 Contains reusable formatting and a helper to wrap a table into a formatted

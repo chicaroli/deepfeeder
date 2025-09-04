@@ -1,3 +1,4 @@
+# _feeders/_tradingview/_config.py
 # """TradingView feeder configuration module.
 #
 # Mirrors the Binance feeder config pattern to keep docker-compose uncluttered.

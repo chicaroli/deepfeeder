@@ -1,3 +1,5 @@
+# ui/status_panel.py
+
 """Status panel for DeepFeeder UI.
 
 Provides a function `status_panel` that returns the live feeder status table

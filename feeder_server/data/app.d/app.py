@@ -1,3 +1,4 @@
+# app.py
 """Deephaven app-mode entrypoint for deepfeeder.
 
 This file imports the explicit binding packages that provide a minimal,

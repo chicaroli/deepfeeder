@@ -1,3 +1,4 @@
+# feeder_server/data/app.d/ui/__init__.py
 """DeepFeeder UI package exports.
 
 Provides modular access to dashboard components:

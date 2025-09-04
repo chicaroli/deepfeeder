@@ -1,3 +1,5 @@
+# filepath: feeder_client/tests/connectors/test_deephaven_connector.py
+
 import os
 import pytest
 from connectors.deephaven_connector import DeephavenConnector

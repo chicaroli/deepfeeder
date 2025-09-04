@@ -1,3 +1,4 @@
+# runtime/dh_thread.py
 """Managed threading wrapper that emits standardized heartbeats."""
 from __future__ import annotations
 import threading

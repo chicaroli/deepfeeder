@@ -1,3 +1,4 @@
+# providers/bins.py
 """Recent time bin utilities for _feeders.
 
 This module now only exposes ``bins_recent`` – a minimal rolling window of period-

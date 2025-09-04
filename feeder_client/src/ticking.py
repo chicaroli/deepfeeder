@@ -1,4 +1,4 @@
-# filepath: /app/src/test_ticking.py
+# filepath: feeder_client/src/ticking.py
 import os
 import time
 from dotenv import load_dotenv

@@ -1,4 +1,4 @@
-# app.d/ingest/manager_tables.py
+# ingest/manager_tables.py
 """Table writers & accessors used by the FeederManager.
 
 Previously this lived in bus.py; renamed for clarity to reflect its

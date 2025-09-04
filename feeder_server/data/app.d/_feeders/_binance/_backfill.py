@@ -1,3 +1,4 @@
+# _feeders/_binance/_backfill.py
 # """
 # BinanceGapFiller: provider-specific gap filler for Binance.
 #
@@ -172,4 +173,3 @@
 #                        f"Finished Binance backfill for {self.symbol} ids {gap_start}..{gap_end}", {"gap_start": gap_start, "gap_end": gap_end, "requests": requests_made})
 #
 #         return all_rows
-#

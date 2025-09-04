@@ -1,3 +1,4 @@
+# persistence/journal.py
 """Hot journal to Parquet and replay utilities.
 
 Design:

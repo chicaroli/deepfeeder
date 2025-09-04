@@ -1,3 +1,4 @@
+# feeder_server/data/storage/notebooks/tests/duckdb/test_journal.py
 # --- Journal smoke test (matches journal_hot schema) -----------------------
 import time, duckdb
 import deepfeeder as dfb

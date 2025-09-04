@@ -1,3 +1,4 @@
+# _feeders/_binance/_journal_adapter.py
 # from __future__ import annotations
 #
 # from typing import Any, Dict, Optional, Tuple, List

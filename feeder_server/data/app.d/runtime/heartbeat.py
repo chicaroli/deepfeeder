@@ -1,3 +1,4 @@
+# runtime/heartbeat.py
 """Heartbeat helper & lightweight supervisor.
 
 Adds a background supervisor thread that periodically refreshes all

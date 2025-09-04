@@ -1,3 +1,4 @@
+# persistence/paths.py
 """Path configuration for persistence layer.
 
 All folders live under /data by default, with a dedicated persistence root:
