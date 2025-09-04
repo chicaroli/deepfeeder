@@ -130,14 +130,14 @@ Both 1m and 5m share unified schema column sets per provider (`BINANCE_OHLCV_SCH
 ```python
 import deepfeeder as df
 
-# Manage feeders
+# Manage _feeders
 resp = df.feeder_manager.start("binance", "default", ["btcusdt","ethusdt"])
 status_dict = df.feeder_manager.status()
 
 # Table access (Deephaven live tables)
-trades = df.get_binance_trades_table()
-bar_1m_sparse = df.get_binance_ohlcv_1m_table()
-bar_1m_filled = df.get_binance_ohlcv_1m_filled_table()
+trades = df.getbinance_trades_table()
+bar_1m_sparse = df.getbinance_ohlcv_1m_table()
+bar_1m_filled = df.getbinance_ohlcv_1m_filled_table()
 
 # Unified bins
 # Recent bins (current + previous)

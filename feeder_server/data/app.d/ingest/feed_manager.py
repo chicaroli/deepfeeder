@@ -12,9 +12,6 @@ from .feeder_specs import FeederSpec
 
 class FeedManager:
     """Coordinates the ingestion pipeline (producers + DH/Journal consumers).
-
-    Functionally replaces the previous Orchestrator class. A back-compat alias
-    `Orchestrator = FeedManager` is provided for any legacy imports.
     """
     def __init__(
         self,

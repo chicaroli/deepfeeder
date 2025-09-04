@@ -46,15 +46,15 @@ def _is_valid_adapter(mod: Any) -> bool:
 def discover_adapters() -> List[AdapterProtocol]:
     adapters: List[AdapterProtocol] = []
     try:
-        import feeders  # type: ignore
+        import _feeders  # type: ignore
     except Exception:
         return adapters
     try:
-        pkg_path = feeders.__path__  # type: ignore
+        pkg_path = _feeders.__path__  # type: ignore
         for finder, name, ispkg in pkgutil.iter_modules(pkg_path):  # type: ignore
             if not ispkg:
                 continue
-            mod_name = f"feeders.{name}.journal_adapter"
+            mod_name = f"_feeders.{name}.journal_adapter"
             try:
                 mod = importlib.import_module(mod_name)
                 if _is_valid_adapter(mod):

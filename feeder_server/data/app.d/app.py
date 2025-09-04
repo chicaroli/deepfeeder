@@ -1,7 +1,7 @@
 """Deephaven app-mode entrypoint for deepfeeder.
 
 This file imports the explicit binding packages that provide a minimal,
-import-safe API for app-mode. Heavy side effects (starting feeders) are
+import-safe API for app-mode. Heavy side effects (starting _feeders) are
 only performed via explicit function calls.
 """
 
@@ -100,7 +100,7 @@ try:
     # Autostart according to your file
     if autostart_env not in ("0", "false", "False"):
         try:
-            _log("AUTOSTART enabled: starting configured feeders...", name="AUTOSTART")
+            _log("AUTOSTART enabled: starting configured _feeders...", name="AUTOSTART")
             fm.start_autostart(specs)
             _log("AUTOSTART completed", name="AUTOSTART")
         except Exception as exc:  # noqa: BLE001 broad so app still loads

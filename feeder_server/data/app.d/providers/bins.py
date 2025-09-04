@@ -1,4 +1,4 @@
-"""Recent time bin utilities for feeders.
+"""Recent time bin utilities for _feeders.
 
 This module now only exposes ``bins_recent`` – a minimal rolling window of period-
 aligned timestamps (current bin plus a fixed number of previous bins). The former

@@ -13,7 +13,6 @@ from config.paths import PATHS
 from core.event_bus import EventBus
 from storage.eventstore_duckdb import DuckDbEventStore
 from storage.journal_duckdb import DuckDbJournal
-from sinks.registry import WriterRegistry
 from sinks.dh_sink import DhSinkDynamic
 
 from ingest.manager_tables import get_status_table, get_configs_table
