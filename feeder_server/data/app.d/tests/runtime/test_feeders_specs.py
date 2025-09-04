@@ -1,4 +1,4 @@
-from runtime.feeder_specs import load_feeder_specs
+from ingest.feeder_specs import load_feeder_specs
 import json
 
 

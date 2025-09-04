@@ -15,6 +15,7 @@ __all__ = ["feeder_controls"]
 # Helper: load feeder specs from registered path service (set in app.py)
 _def_specs_path = "/data/storage/notebooks/feeders.json"
 
+
 def _load_specs() -> List[Dict[str, Any]]:
     path = None
     try:
@@ -78,29 +79,60 @@ def feeder_controls():  # type: ignore[no-untyped-def]
             return None
         return selected_key
 
+    def _matching_producers(fm, service_key: str) -> list[str]:
+        """Map a service key 'provider:name' to all producer names 'provider:stream:name'."""
+        try:
+            provider, service = service_key.split(":", 1)
+        except ValueError:
+            return []
+        matches = []
+        for n in fm.list_producers():
+            parts = n.split(":", 2)  # ["provider","stream","name"]
+            if len(parts) == 3 and parts[0] == provider and parts[2] == service:
+                matches.append(n)
+        return matches
+
     def start_selected():
         if not fm:
-            ui.toast("FeedManager unavailable")
+            ui.toast("FeedManager unavailable");
             return
         key = _ensure_selected()
-        if key:
+        if not key:
+            return
+        names = _matching_producers(fm, key)
+        if not names:
+            ui.toast(f"No producers found for {key}");
+            return
+        errs = 0
+        for n in names:
             try:
-                fm.start_producer(key)
-                ui.toast(f"Started {key}")
+                fm.start_producer(n)
             except Exception as e:  # noqa: BLE001
-                ui.toast(f"Start failed: {e!r}")
+                errs += 1
+                ui.toast(f"Start failed for {n}: {e!r}")
+        if errs == 0:
+            ui.toast(f"Started service {key} ({len(names)} stream(s))")
 
     def stop_selected():
         if not fm:
-            ui.toast("FeedManager unavailable")
+            ui.toast("FeedManager unavailable");
             return
         key = _ensure_selected()
-        if key:
+        if not key:
+            return
+        names = _matching_producers(fm, key)
+        if not names:
+            ui.toast(f"No producers found for {key}");
+            return
+        errs = 0
+        for n in names:
             try:
-                fm.stop_producer(key)
-                ui.toast(f"Stopped {key}")
+                fm.stop_producer(n)
             except Exception as e:  # noqa: BLE001
-                ui.toast(f"Stop failed: {e!r}")
+                errs += 1
+                ui.toast(f"Stop failed for {n}: {e!r}")
+        if errs == 0:
+            ui.toast(f"Stopped service {key} ({len(names)} stream(s))")
 
     def start_all():
         if not fm:

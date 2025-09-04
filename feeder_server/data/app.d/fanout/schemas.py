@@ -17,7 +17,7 @@ from providers.binance import (
     binance_ohlcv_5m_filled,
 )
 import providers.binance.schema as binance_sch
-from feeders.tradingview import (
+from providers.tradingview import (
     tv_quotes_table,
     tv_ohlcv_1m_filled,
 )

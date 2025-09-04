@@ -1,7 +1,6 @@
 from .adapter import (
     trade_json_to_tick,
-    flatten_trades,
-    flatten_trades_for_dh
+    flatten_trades
 )
 from .schema import (
     binance_trades_writer,
@@ -16,7 +15,6 @@ __all__ = [
     # Adapter functions
     "trade_json_to_tick",
     "flatten_trades",
-    "flatten_trades_for_dh",
 
     # Schema objects
     "binance_trades_writer",

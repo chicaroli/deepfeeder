@@ -1,19 +1,25 @@
-# app.d/ingest/factories.py
+# ingest/factories.py
 from __future__ import annotations
-from typing import Any, Mapping
 from core.contracts import EventBus, Producer
-from runtime.feeder_specs import FeederSpec
-from ingest.producers.binance_ws import BinanceWsProducer
+from .feeder_specs import FeederSpec
+from providers.binance.producer_ws import BinanceWsProducer
+from providers.tradingview.producer_ws import TradingViewWsProducer
+# from providers.tradingview.producer_rest import TradingViewBarsRestProducer
 
 
-def make_binance_ws(spec: FeederSpec, bus: EventBus) -> Producer:
-    cfg: Mapping[str, Any] = spec.extra
-    batch_size = int(cfg.get("batch_size", 64))
-    flush_s    = float(cfg.get("flush_interval_s", 0.25))
-    return BinanceWsProducer(
-        spec.name,
-        spec.symbols,
-        bus,
-        batch_size=batch_size,
-        flush_interval_s=flush_s
-    )
+PRODUCER_REGISTRY: dict[tuple[str,str], type[Producer]] = {
+    ("binance",     "trades"):  BinanceWsProducer,
+    ("tradingview", "quotes"):  TradingViewWsProducer,
+    # ("tradingview", "bars"):    TradingViewBarsRestProducer,
+}
+
+
+def create_producers(spec: FeederSpec, bus: EventBus) -> list[Producer]:
+    bs  = int(spec.extra.get("batch_size", 64))
+    fls = float(spec.extra.get("flush_interval_s", 0.25))
+    producers: list[Producer] = []
+    for st in spec.streams:
+        cls = PRODUCER_REGISTRY[(spec.provider, st)]
+        name = f"{spec.provider}:{st}:{spec.name}"   # canonical per-producer name
+        producers.append(cls(name, spec.symbols, bus, batch_size=bs, flush_interval_s=fls))    # type: ignore[arg-type]
+    return producers

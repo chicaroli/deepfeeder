@@ -25,7 +25,7 @@ from providers.binance import (
     binance_ohlcv_5m as get_binance_ohlcv_5m_table,
     binance_ohlcv_5m_filled as get_binance_ohlcv_5m_filled_table,
 )
-from feeders.tradingview import (
+from providers.tradingview import (
     tv_quotes_table as get_tv_quotes_table,
     tv_bars_table as get_tv_bars_table,
     tv_bars_table_deduped as get_tv_bars_table_deduped,
@@ -61,12 +61,12 @@ def _make_dh_registry() -> WriterRegistry:
     # Wrap your existing DynamicTableWriters here:
 
     # TradingView:
-    # reg.add(
-    #     provider="tradingview",
-    #     stream="quotes",
-    #     writer=feeders.tradingview.schema.tv_quotes_writer(),
-    #     flatten=providers.tradingview.adapter.flatten_quotes
-    #     )
+    reg.add(
+        provider="tradingview",
+        stream="quotes",
+        writer=providers.tradingview.schema.tv_quotes_writer(),
+        flatten=providers.tradingview.adapter.flatten_quotes
+        )
     # reg.add(
     #     provider="tradingview",
     #     stream="bars",
@@ -79,7 +79,7 @@ def _make_dh_registry() -> WriterRegistry:
         provider="binance",
         stream="trades",
         writer=providers.binance.schema.binance_trades_writer(),
-        flatten=providers.binance.adapter.flatten_trades_for_dh
+        flatten=providers.binance.adapter.flatten_trades
         )
 
     return reg

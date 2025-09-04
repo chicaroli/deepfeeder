@@ -8,7 +8,7 @@ import os
 DEBUG_IO = os.getenv("DF_DEBUG_IO", "0") not in ("0", "false", "False")
 
 from runtime.consumers import dh_consumer_loop, journal_consumer_loop
-from runtime.feeder_specs import FeederSpec
+from .feeder_specs import FeederSpec
 
 class FeedManager:
     """Coordinates the ingestion pipeline (producers + DH/Journal consumers).
@@ -116,12 +116,13 @@ class FeedManager:
 
     # -------------------- Autostart --------------------
     def start_autostart(self, specs: List[FeederSpec]) -> None:
-        to_start = {f"{s.provider}:{s.name}" for s in specs if s.autostart}
-        for name in self.list_producers():
-            if name in to_start:
-                self.start_producer(name)
-
-    # Backward compatible name (old Orchestrator API)
-    def run_autostart(self, specs: List[FeederSpec]) -> None:  # noqa: D401
-        """Alias for start_autostart (legacy Orchestrator compatibility)."""
-        self.start_autostart(specs)
+        for s in specs:
+            if not s.autostart:
+                continue
+            for st in s.streams:
+                pname = f"{s.provider}:{st}:{s.name}"
+                try:
+                    self.start_producer(pname)
+                    emit_event("feeder", "feed_manager", "autostart", "INFO", "STARTED", pname)
+                except Exception as e:
+                    emit_event("feeder", "feed_manager", "autostart", "ERROR", "START_FAIL", f"{pname}: {e!r}")

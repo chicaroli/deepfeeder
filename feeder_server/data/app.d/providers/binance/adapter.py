@@ -49,19 +49,8 @@ def trade_json_to_tick(msg: dict) -> Tick:
         is_final=True,
     )
 
-def flatten_trades(ticks: List[Tick]) -> Dict[str, List]:
-    return {
-        "Provider": [t.provider for t in ticks],
-        "Stream":   [t.stream for t in ticks],
-        "Symbol":   [t.symbol for t in ticks],
-        "TsNanos":  [t.ts_ns for t in ticks],
-        "TradeId":  [t.seq for t in ticks],   # Binance sequence is true tradeId
-        "Price":    [t.payload.get("Price") for t in ticks],
-        "Quantity": [t.payload.get("Quantity") for t in ticks],
-        "IsBuyerMaker": [t.payload.get("IsBuyerMaker", False) for t in ticks],
-    }
 
-def flatten_trades_for_dh(ticks: List["Tick"]) -> Dict[str, List]:
+def flatten_trades(ticks: List["Tick"]) -> Dict[str, List]:
     """
     Convert Tick -> rowdict matching binance_trades_writer() (10 columns):
       EventType, EventTime, Symbol, TradeID, Price, Quantity, BuyerID, SellerID, Timestamp, IsBuyerMaker

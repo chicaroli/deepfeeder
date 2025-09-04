@@ -1,73 +1,123 @@
 from __future__ import annotations
-from typing import Dict, List
+from typing import Dict, List, Optional, Union
+from datetime import datetime, timezone
+from deephaven.time import to_j_instant
 from core.contracts import Tick
 
-# TradingView adapter: convert TV JSON to Tick
-def quote_json_to_tick(symbol: str, q: dict) -> Tick:
-    bid = float(q.get("bid") or 0.0)
-    ask = float(q.get("ask") or 0.0)
-    mid = float(q.get("mid") or ((bid + ask) / 2.0 if (bid and ask) else 0.0))
+Number = Union[int, float]
+
+# --- helpers ---------------------------------------------------------------
+def _f(x) -> Optional[float]:
+    try:
+        return float(x) if x is not None else None
+    except Exception:
+        return None
+
+def _i(x) -> Optional[int]:
+    try:
+        return int(x) if x is not None else None
+    except Exception:
+        return None
+
+def _b(x) -> bool:
+    return bool(x)
+
+def _ts_s_to_ns(ts_seconds: Number) -> int:
+    # TV WS `lp_time` is seconds since epoch; normalize to ns
+    return int(float(ts_seconds) * 1_000_000_000)
+
+def _ns_to_instant(ns: Optional[int]):
+    if ns is None:
+        return None
+    return to_j_instant(datetime.fromtimestamp(ns / 1_000_000_000, tz=timezone.utc))
+
+# --- adapters --------------------------------------------------------------
+def tv_quote_ws_to_tick(
+    exchange: Optional[str], symbol_raw: str, v: dict, *,
+    ts_ns_override: Optional[int] = None, vol_delta: Optional[float] = None
+) -> Tick:
+    # lp_time (seconds) -> ns
+    ts_ns = ts_ns_override if ts_ns_override is not None else (
+        _ts_s_to_ns(v["lp_time"]) if v.get("lp_time") is not None else None
+    )
+    if ts_ns is None:
+        # As a last resort, you can inject "arrival" time upstream and pass via ts_ns_override
+        raise ValueError("TradingView quote missing timestamp (lp_time) and ts_ns_override not provided")
+
+    exch = (exchange or "").upper()
+    sym  = symbol_raw.upper()
+
     return Tick(
         provider="tradingview",
         stream="quotes",
-        symbol=symbol.upper(),
-        ts_ns=int(q["ts"]) * 1_000_000_000,   # s→ns
+        symbol=sym,
+        ts_ns=ts_ns,
         seq=None,
-        payload={"bid": bid, "ask": ask, "mid": mid},
-        is_final=False,                       # provisional
+        is_final=False,
+        payload={
+            "exchange":   exch,
+            "last_price": _f(v.get("lp")),
+            "bid":        _f(v.get("bid")),
+            "ask":        _f(v.get("ask")),
+            "volume":     _f(v.get("volume")),
+            "change":     _f(v.get("ch")),
+            "change_pct": _f(v.get("chp")),
+            "vol_delta":  _f(vol_delta if vol_delta is not None else 0.0),
+        },
     )
 
-def api_bar_to_tick(symbol: str, bar: dict) -> Tick:
+def tv_api_bar_to_tick(exchange: Optional[str], symbol_raw: str, bar: dict) -> Tick:
+    ts_ns = _ts_s_to_ns(bar["t"])  # TV bar.open in seconds
+    exch = (exchange or "").upper()
+    sym  = symbol_raw.upper()
+
     return Tick(
         provider="tradingview",
         stream="ohlcv_1m",
-        symbol=symbol.upper(),
-        ts_ns=int(bar["t"]) * 1_000_000_000,  # bar open time
+        symbol=sym,
+        ts_ns=ts_ns,
         seq=None,
+        is_final=True,
         payload={
-            "open": float(bar["o"]),
-            "high": float(bar["h"]),
-            "low": float(bar["l"]),
-            "close": float(bar["c"]),
-            "volume": float(bar["v"]),
+            "exchange": exch,
+            "open":  _f(bar.get("o")),
+            "high":  _f(bar.get("h")),
+            "low":   _f(bar.get("l")),
+            "close": _f(bar.get("c")),
+            "volume": _f(bar.get("v")),
         },
-        is_final=True,                        # authoritative
     )
 
-
-# Flatten TV quotes ticks into a dict of columns
+# --- flatteners (match DH schema exactly) ----------------------------------
 def flatten_quotes(ticks: List[Tick]) -> Dict[str, List]:
+    # Matches _QUOTES_DTW: Exchange, Symbol, LpTime(Instant), LastPrice, Bid, Ask, Volume, Change, ChangePct, VolDelta
     return {
-        "Provider": [t.provider for t in ticks],
-        "Stream":   [t.stream   for t in ticks],      # "quotes"
-        "Symbol":   [t.symbol   for t in ticks],
-        "TsNanos":  [t.ts_ns    for t in ticks],
-        "Seq":      [(-1 if t.seq is None else t.seq) for t in ticks],
-        "IsFinal":  [t.is_final for t in ticks],      # False here
-        "Bid":      [t.payload.get("bid") for t in ticks],
-        "Ask":      [t.payload.get("ask") for t in ticks],
-        "Mid":      [t.payload.get("mid") for t in ticks],
-        # Add more TV-specific cols only if your DH table has them.
+        "Exchange":  [t.payload.get("exchange", "") for t in ticks],
+        "Symbol":    [t.symbol for t in ticks],
+        "LpTime":    [_ns_to_instant(int(t.ts_ns)) for t in ticks],
+        "LastPrice": [t.payload.get("last_price") for t in ticks],
+        "Bid":       [t.payload.get("bid") for t in ticks],
+        "Ask":       [t.payload.get("ask") for t in ticks],
+        "Volume":    [t.payload.get("volume") for t in ticks],
+        "Change":    [t.payload.get("change") for t in ticks],
+        "ChangePct": [t.payload.get("change_pct") for t in ticks],
+        "VolDelta":  [t.payload.get("vol_delta") for t in ticks],
     }
 
 def flatten_bar(ticks: List[Tick]) -> Dict[str, List]:
+    # Matches _BARS_DTW: Exchange, Symbol, Timestamp(Instant), Open, High, Low, Close, Volume
     return {
-        "Provider": [t.provider for t in ticks],
-        "Stream":   [t.stream   for t in ticks],      # "ohlcv_1m"
-        "Symbol":   [t.symbol   for t in ticks],
-        "TsNanos":  [t.ts_ns    for t in ticks],
-        "Seq":      [(-1 if t.seq is None else t.seq) for t in ticks],
-        "IsFinal":  [t.is_final for t in ticks],      # True for API bars
-        "Open":     [t.payload.get("open")   for t in ticks],
-        "High":     [t.payload.get("high")   for t in ticks],
-        "Low":      [t.payload.get("low")    for t in ticks],
-        "Close":    [t.payload.get("close")  for t in ticks],
-        "Volume":   [t.payload.get("volume") for t in ticks],
+        "Exchange":  [t.payload.get("exchange", "") for t in ticks],
+        "Symbol":    [t.symbol for t in ticks],
+        "Timestamp": [_ns_to_instant(int(t.ts_ns)) for t in ticks],
+        "Open":      [t.payload.get("open")   for t in ticks],
+        "High":      [t.payload.get("high")   for t in ticks],
+        "Low":       [t.payload.get("low")    for t in ticks],
+        "Close":     [t.payload.get("close")  for t in ticks],
+        "Volume":    [t.payload.get("volume") for t in ticks],
     }
 
 # Optional: if you materialize provisional bars from quotes into a separate table
 def flatten_bars_from_quotes(ticks: List[Tick]) -> Dict[str, List]:
-    out = flatten_bar(ticks)
-    # If your DH table expects IsFinal=False here, enforce it:
-    out["IsFinal"] = [False] * len(ticks)
-    return out
+    # Only use if your DH table matches these columns; no IsFinal column in _BARS_DTW.
+    return flatten_bar(ticks)

@@ -39,9 +39,9 @@ _log(f"env DEEPFEEDER_AUTOSTART={autostart_env!r} DEEPFEEDER_REGISTER_UI={regist
 import deepfeeder as dfb
 import ui.dashboard
 from runtime.eventlog import emit_event
-from runtime.feed_manager import FeedManager
-from runtime.feeder_specs import load_feeder_specs
-from ingest.factories import make_binance_ws #, make_tradingview_ws, make_tradingview_backfill
+from ingest.feed_manager import FeedManager
+from ingest.feeder_specs import load_feeder_specs
+from ingest.factories import create_producers
 
 
 # --- optional UI registration ----
@@ -75,30 +75,33 @@ try:
     _log("FeedManager consumers started", name="CORE")
 
 
+    # --- Load feeder specs
     specs_path = os.getenv("DEEPFEEDER_FEEDERS_JSON", "/data/storage/notebooks/feeders.json")
-    specs = load_feeder_specs(specs_path)
+    try:
+        specs = load_feeder_specs(specs_path)
+    except Exception as e:
+        _log(f"Failed to load feeder specs from {specs_path}: {e!r}", name="FEEDERS", level="ERROR")
+        specs = []
     # expose specs path (optional) for UI reload logic
     try:
         dfb.services.register("feeder_specs_path", specs_path)
     except Exception:
         pass
 
-    # Register producers per spec
+    # --- Register producers
+    registered = []
     for spec in specs:
-        if spec.provider == "binance":
-            fm.register(make_binance_ws(spec, bus))
-        elif spec.provider == "tradingview":
-            pass
-            # orch.register(make_tradingview_ws(spec, bus))
-            # orch.register(make_tradingview_backfill(spec, bus))  # final bars
+        for p in create_producers(spec, bus):
+            fm.register(p)
+            registered.append((spec, p))
+    _log(f"Producers: {fm.list_producers()}", name="FEEDERS")
 
-    _log("core runners started (DH & Journal consumers)", name="CORE")
 
     # Autostart according to your file
     if autostart_env not in ("0", "false", "False"):
         try:
             _log("AUTOSTART enabled: starting configured feeders...", name="AUTOSTART")
-            # fm.start_autostart(specs)
+            fm.start_autostart(specs)
             _log("AUTOSTART completed", name="AUTOSTART")
         except Exception as exc:  # noqa: BLE001 broad so app still loads
             _log(f"AUTOSTART failed: {exc!r}", name="AUTOSTART", level="ERROR")
