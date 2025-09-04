@@ -1,6 +1,5 @@
 from .adapter import (
     tv_quote_ws_to_tick,
-    tv_api_bar_to_tick,
     flatten_quotes,
     flatten_bar,
     flatten_bars_from_quotes,
@@ -20,7 +19,6 @@ from .schema import (
 __all__ = [
     # Adapter functions
     "tv_quote_ws_to_tick",
-    "tv_api_bar_to_tick",
     "flatten_quotes",
     "flatten_bar",
     "flatten_bars_from_quotes",

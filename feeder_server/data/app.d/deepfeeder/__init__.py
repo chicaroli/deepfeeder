@@ -55,6 +55,7 @@ services.register("event_store", lambda: DuckDbEventStore(str(PATHS.event_store_
 services.register("journal_store", lambda: DuckDbJournal(str(PATHS.journal_db)))
 _es = services.get("event_store")
 services.register("event_bus", lambda es=_es: EventBus(es, max_envelopes=100_000))
+
 services.register("dh_sink", lambda: DhSinkDynamic(register_writers()))
 
 

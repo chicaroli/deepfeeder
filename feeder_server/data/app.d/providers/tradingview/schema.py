@@ -12,7 +12,7 @@ TV_QUOTES_SCHEMA_COLS = ("LpTime", "Symbol", "LastPrice", "Bid", "Ask", "Volume"
 # Unified bars schema (common to all minute aggregations)
 TV_BARS_TIME_COL = "Timestamp"
 TV_BARS_SYMBOL_COL = "Symbol"
-TV_BARS_SCHEMA_COLS = ("Timestamp", "Exchange", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "Vwap", "IsFinal")
+TV_BARS_SCHEMA_COLS = ("Timestamp", "Exchange", "Symbol", "BarId", "Open", "High", "Low", "Close", "Volume", "IsFinal")
 TV_BARS_FILLED_SCHEMA_COLS = TV_BARS_SCHEMA_COLS + ("IsEmpty",)
 
 __all__ = [
@@ -110,7 +110,6 @@ _BARS_FROM_QUOTES = (
     by=['Exchange', 'Symbol', 'Timestamp'])
     .update_view([
         'BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / MINUTE)',
-        'Vwap = Volume == 0 ? null : PriceQty / Volume',
         'IsFinal = false',
     ])
     .drop_columns(['PriceQty'])
@@ -144,24 +143,31 @@ def tv_bars_filled():
 # ---------- Derived Tables Definitions ----------------------------------------
 # TV bars from bars + quotes
 def _build_tv_bars():
-    quotes_1m = (
+    # 1) Quotes-derived 1m bars (always IsFinal = False)
+    bar_quotes = (
         _BARS_FROM_QUOTES
         .view(['Exchange', 'Symbol', 'Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'IsFinal'])
-        )
+    )
     bars_last = _BARS_DEDUPED_TABLE.agg_by(aggs=[agg.max_("LastBarTs=Timestamp")], by=["Exchange", "Symbol"])
     quotes_after_cutoff = (
-        quotes_1m
-            .natural_join(bars_last, on=["Exchange", "Symbol"], joins=["LastBarTs"])
-            .where("isNull(LastBarTs) || Timestamp > LastBarTs")
-            .drop_columns("LastBarTs")
+        bar_quotes
+        .natural_join(bars_last, on=["Exchange","Symbol"], joins=["LastBarTs"])
+        .where("isNull(LastBarTs) || Timestamp > LastBarTs")
+        .drop_columns("LastBarTs")
     )
-    stitched_bars = (
+
+    stitched = (
         merge([_BARS_DEDUPED_TABLE, quotes_after_cutoff])
+        .update_view(["Priority = IsFinal ? 2 : 1"])  # finals outrank provisionals
+        .sort(["Exchange","Symbol","Timestamp","Priority"])
+        .last_by(["Exchange","Symbol","Timestamp"])
         .update_view([
             'BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / MINUTE)',
-            ])
-        )
-    return stitched_bars
+        ])
+        .view(list(TV_BARS_SCHEMA_COLS))
+    )
+    return stitched
+
 
 _OHLCV_1M = _build_tv_bars()
 

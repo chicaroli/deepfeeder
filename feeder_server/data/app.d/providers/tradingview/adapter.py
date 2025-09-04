@@ -66,27 +66,6 @@ def tv_quote_ws_to_tick(
         },
     )
 
-def tv_api_bar_to_tick(exchange: Optional[str], symbol_raw: str, bar: dict) -> Tick:
-    ts_ns = _ts_s_to_ns(bar["t"])  # TV bar.open in seconds
-    exch = (exchange or "").upper()
-    sym  = symbol_raw.upper()
-
-    return Tick(
-        provider="tradingview",
-        stream="ohlcv_1m",
-        symbol=sym,
-        ts_ns=ts_ns,
-        seq=None,
-        is_final=True,
-        payload={
-            "exchange": exch,
-            "open":  _f(bar.get("o")),
-            "high":  _f(bar.get("h")),
-            "low":   _f(bar.get("l")),
-            "close": _f(bar.get("c")),
-            "volume": _f(bar.get("v")),
-        },
-    )
 
 # --- flatteners (match DH schema exactly) ----------------------------------
 def flatten_quotes(ticks: List[Tick]) -> Dict[str, List]:
