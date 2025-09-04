@@ -11,8 +11,8 @@ from .schema import (
     tv_bars_writer,
     tv_bars_table,
     tv_bars_table_deduped,
-    tv_ohlcv_1m_from_quotes,
-    tv_ohlcv_1m_filled,
+    tv_bars_from_quotes,
+    tv_bars_filled,
     tv_ohlcv_1m,
     tv_ohlcv_5m,
 )
@@ -31,8 +31,8 @@ __all__ = [
     "tv_bars_writer",
     "tv_bars_table",
     "tv_bars_table_deduped",
-    "tv_ohlcv_1m_from_quotes",
-    "tv_ohlcv_1m_filled",
+    "tv_bars_from_quotes",
+    "tv_bars_filled",
     "tv_ohlcv_1m",
     "tv_ohlcv_5m",
 ]

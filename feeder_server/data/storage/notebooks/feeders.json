@@ -2,26 +2,29 @@
   {
     "provider": "binance",
     "name": "main",
-    "streams": ["trades"],
     "symbols": ["btcusdt"],
+    "streams": ["trades"],
     "autostart": false
   },
   {
     "provider": "binance",
     "name": "other",
-    "streams": ["trades"],
     "symbols": ["ethusdt", "ltcusdt", "solusdt", "maticusdt", "avaxusdt"],
+    "streams": ["trades"],
     "autostart": false
   },
   {
     "provider": "tradingview",
     "name": "b3_futures",
-    "streams": ["quotes"],
     "symbols": [
       "BMFBOVESPA:INDV2025", "BMFBOVESPA:WINV2025",
       "BMFBOVESPA:DOLU2025", "BMFBOVESPA:WDOV2025",
       "BMFBOVESPA:DI1Z2025", "BMFBOVESPA:DI1N2026"
     ],
-    "autostart": true
+    "streams": ["quotes", "bars"],
+    "autostart": true,
+    "extra": {
+      "quotes": {"flush_interval_s": 0.25},
+      "bars":   {"batch_size": 5000, "flush_interval_s": 60.0}}
   }
 ]

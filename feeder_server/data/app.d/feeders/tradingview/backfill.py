@@ -11,8 +11,8 @@ from deephaven import arrow as dh_arrow
 
 from runtime.backfill import GapFiller
 from runtime.eventlog import emit_event
-from .transform import df_row_to_dh_row
-from .api import fetch_tv_data
+from feeders.tradingview.transform import df_row_to_dh_row
+from providers.tradingview.api import fetch_tv_data
 from providers.tradingview.schema import tv_bars_writer
 
 

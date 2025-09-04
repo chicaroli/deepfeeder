@@ -75,7 +75,8 @@ def df_row_to_dh_row(exchange: str, symbol: str, row: pd.Series) -> Dict[str, An
         'high': row['high'],
         'low': row['low'],
         'close': row['close'],
-        'volume': row['volume']
+        'volume': row['volume'],
+        'IsFinal': row.get('is_final', False),  # Pass through, default to False
     }
 
 def normalize_journal_record(rec: dict) -> dict:
@@ -109,6 +110,7 @@ def normalize_journal_record(rec: dict) -> dict:
         'low': rec.get('low'),
         'close': rec.get('close'),
         'volume': rec.get('volume'),
+        'IsFinal': rec.get('IsFinal', False),  # Default to False if not present
     }
 
 def records_to_dataframe(rows: list[dict]) -> pd.DataFrame:

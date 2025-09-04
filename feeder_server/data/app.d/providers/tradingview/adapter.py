@@ -105,19 +105,20 @@ def flatten_quotes(ticks: List[Tick]) -> Dict[str, List]:
     }
 
 def flatten_bar(ticks: List[Tick]) -> Dict[str, List]:
-    # Matches _BARS_DTW: Exchange, Symbol, Timestamp(Instant), Open, High, Low, Close, Volume
+    # Matches _BARS_DTW: Exchange, Symbol, Timestamp(Instant), Open, High, Low, Close, Volume, IsFinal
     return {
         "Exchange":  [t.payload.get("exchange", "") for t in ticks],
-        "Symbol":    [t.symbol for t in ticks],
+        "Symbol":    [t.payload.get("symbol", "") for t in ticks],
         "Timestamp": [_ns_to_instant(int(t.ts_ns)) for t in ticks],
         "Open":      [t.payload.get("open")   for t in ticks],
         "High":      [t.payload.get("high")   for t in ticks],
         "Low":       [t.payload.get("low")    for t in ticks],
         "Close":     [t.payload.get("close")  for t in ticks],
         "Volume":    [t.payload.get("volume") for t in ticks],
+        "IsFinal":   [t.is_final for t in ticks],
     }
 
 # Optional: if you materialize provisional bars from quotes into a separate table
 def flatten_bars_from_quotes(ticks: List[Tick]) -> Dict[str, List]:
-    # Only use if your DH table matches these columns; no IsFinal column in _BARS_DTW.
+    # Only use if your DH table matches these columns; now includes IsFinal column in _BARS_DTW.
     return flatten_bar(ticks)

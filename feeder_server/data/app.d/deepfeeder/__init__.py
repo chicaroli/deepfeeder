@@ -17,6 +17,7 @@ from sinks.registry import WriterRegistry
 from sinks.dh_sink import DhSinkDynamic
 
 from ingest.manager_tables import get_status_table, get_configs_table
+from ingest.factories import register_writers
 
 from providers.binance import (
     binance_trades_table as get_binance_trades_table,
@@ -29,8 +30,8 @@ from providers.tradingview import (
     tv_quotes_table as get_tv_quotes_table,
     tv_bars_table as get_tv_bars_table,
     tv_bars_table_deduped as get_tv_bars_table_deduped,
-    tv_ohlcv_1m_from_quotes as get_tv_ohlcv_1m_from_quotes,
-    tv_ohlcv_1m_filled as get_tv_ohlcv_1m_filled,
+    tv_bars_from_quotes as get_tv_bars_1m_from_quotes,
+    tv_bars_filled as get_tv_bars_1m_filled,
     tv_ohlcv_1m as get_tv_ohlcv_1m_table,
     tv_ohlcv_5m as get_tv_ohlcv_5m_table,
 )
@@ -45,8 +46,8 @@ from runtime.services import Services
 import providers
 import ingest
 import fanout
-import ui
 import runtime
+import ui
 
 # --- services container ----------------------------------------------------
 services = Services()
@@ -54,37 +55,7 @@ services.register("event_store", lambda: DuckDbEventStore(str(PATHS.event_store_
 services.register("journal_store", lambda: DuckDbJournal(str(PATHS.journal_db)))
 _es = services.get("event_store")
 services.register("event_bus", lambda es=_es: EventBus(es, max_envelopes=100_000))
-
-# Provide a factory that returns the dict bound to your real DH writers.
-def _make_dh_registry() -> WriterRegistry:
-    reg = WriterRegistry()
-    # Wrap your existing DynamicTableWriters here:
-
-    # TradingView:
-    reg.add(
-        provider="tradingview",
-        stream="quotes",
-        writer=providers.tradingview.schema.tv_quotes_writer(),
-        flatten=providers.tradingview.adapter.flatten_quotes
-        )
-    # reg.add(
-    #     provider="tradingview",
-    #     stream="bars",
-    #     writer=feeders.tradingview.schema.tv_bars_writer(),
-    #     flatten=providers.tradingview.adapter.flatten_ohlcv_1m
-    #     )
-
-    # Binance:
-    reg.add(
-        provider="binance",
-        stream="trades",
-        writer=providers.binance.schema.binance_trades_writer(),
-        flatten=providers.binance.adapter.flatten_trades
-        )
-
-    return reg
-
-services.register("dh_sink", lambda: DhSinkDynamic(_make_dh_registry()))
+services.register("dh_sink", lambda: DhSinkDynamic(register_writers()))
 
 
 def get_services_container():
@@ -111,10 +82,10 @@ def tables() -> Dict[str, Table]:
         "tv_quotes": get_tv_quotes_table(),
         "tv_bars": get_tv_bars_table(),
         "tv_bars_deduped": get_tv_bars_table_deduped(),
-        "tv_ohlcv_1m_from_quotes": get_tv_ohlcv_1m_from_quotes(),
-        "tv_ohlcv_1m_filled": get_tv_ohlcv_1m_filled(),
-        "tv_ohlcv_1m": get_tv_ohlcv_1m_table(),
-        "tv_ohlcv_5m": get_tv_ohlcv_5m_table(),
+        "tv_bars_1m_from_quotes": get_tv_bars_1m_from_quotes(),
+        "tv_bars_1m_filled": get_tv_bars_1m_filled(),
+        "tv_bars_1m": get_tv_ohlcv_1m_table(),
+        "tv_bars_5m": get_tv_ohlcv_5m_table(),
         # Lightweight recent windows (hard-coded 2 bars: current + previous)
         "bins_1m_recent": bins_recent(1, 2),
         "bins_5m_recent": bins_recent(5, 2),
@@ -132,16 +103,15 @@ __all__ = [
     "get_binance_ohlcv_5m_table", "get_binance_ohlcv_5m_filled_table",
 
     "get_tv_quotes_table", "get_tv_bars_table", "get_tv_bars_table_deduped",
-    "get_tv_ohlcv_1m_from_quotes",
-    "get_tv_ohlcv_1m_filled",
+    "get_tv_bars_1m_from_quotes",
+    "get_tv_bars_1m_filled",
     "get_tv_ohlcv_1m_table",
     "get_tv_ohlcv_5m_table",
 
     # Helpers
     "tables", "get_fanout_stats_table",
     # Namespaces
-    "ingest", "fanout", "ui",
-    "runtime",
+    "providers", "ingest", "fanout", "runtime", "ui",
     # Event log
     "get_eventlog_table",
 ]
