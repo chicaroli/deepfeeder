@@ -106,7 +106,8 @@ def journal_consumer_loop(stop_event, event_store: EventStore, journal: JournalS
             for env in envs:
                 # append into journal (idempotent)
                 try:
-                    added = journal.append_batch(env.rows)
+                    # added = journal.append_batch(env.rows)
+                    added = journal.append_envelope(env)
                 except Exception as e:
                     emit_event("feeder", "journal_consumer", "consumer", "ERROR",
                                "JOURNAL_APPEND_ERR", f"batch={env.batch_id} err={e!r}")

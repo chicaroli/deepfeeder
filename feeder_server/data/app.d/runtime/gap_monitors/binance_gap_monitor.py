@@ -10,17 +10,32 @@ from runtime.backfill.planner import BackfillPlanner, Gap
 _WM_BATCH_SCOPE = "gapmon:binance:batch"
 _WM_LASTSEQ_SCOPE_PREFIX = "gapmon:binance:last_seq:"  # + symbol
 
+# Set >0 to always backfill a small recent slice on the first sighting of a symbol
+_BOOTSTRAP_LOOKBACK_IDS = 0  # e.g., 10_000 if you want a startup lookback
+
 class BinanceGapMonitor:
     """
-    Scans persisted envelopes from EventStore to detect gaps in (provider='binance', stream='trades') Tick.seq.
+    Scans committed envelopes to detect gaps in (provider='binance', stream='trades') Tick.seq.
     Emits gaps into BackfillPlanner (which mirrors them to UI and tasks).
-    Uses JournalStore.watermarks to persist cursors and per-symbol last_seq across restarts.
+    Persists:
+      - batch cursor in journal watermarks (_WM_BATCH_SCOPE)
+      - per-symbol last_seq in journal watermarks (_WM_LASTSEQ_SCOPE_PREFIX + symbol)
+
+    NOTE: Prefers Journal (committed history). Falls back to EventStore if journal
+    does not expose next_committed_from(start, limit).
     """
 
-    def __init__(self, *, event_store: EventStore, journal: JournalStore, planner: BackfillPlanner, poll_delay_s: float = 0.25):
-        self.event_store = event_store
+    def __init__(
+        self,
+        *,
+        journal: JournalStore,
+        planner: BackfillPlanner,
+        event_store: Optional[EventStore] = None,
+        poll_delay_s: float = 0.25,
+    ):
         self.journal = journal
         self.planner = planner
+        self.event_store = event_store  # optional, only for fallback
         self.poll_delay_s = float(poll_delay_s)
         self._thread: Optional[DHThread] = None
         self._running = False
@@ -48,7 +63,7 @@ class BinanceGapMonitor:
             return self._last_seq[symbol]
         try:
             v = self.journal.get_watermark(f"{_WM_LASTSEQ_SCOPE_PREFIX}{symbol}")
-            self._last_seq[symbol] = int(v) if v > 0 else None  # type: ignore[return-value]
+            self._last_seq[symbol] = int(v) if v and int(v) > 0 else None  # type: ignore[return-value]
             return self._last_seq[symbol]
         except Exception:
             return None
@@ -60,63 +75,100 @@ class BinanceGapMonitor:
         except Exception:
             pass
 
+    def _fetch_envs(self, start_batch: int, limit: int):
+        # Prefer Journal scanning by batch (committed). Fall back to EventStore if needed.
+        try:
+            return self.journal.next_committed_from(start_batch, limit)  # type: ignore[attr-defined]
+        except AttributeError:
+            if self.event_store is None:
+                return []
+            return self.event_store.next_from(start_batch, limit)
+
     # ----- main loop --------------------------------------------------------
     def _run(self, stop_event):
-        # starting point: resume from last processed batch id
+        # starting point: resume from last processed batch id (committed)
         try:
-            next_batch = int(self.journal.get_watermark(_WM_BATCH_SCOPE)) + 1
+            last = int(self.journal.get_watermark(_WM_BATCH_SCOPE))
         except Exception:
-            next_batch = 1
+            last = 0
+        next_batch = last + 1
 
-        emit_event("feeder", "binance_gapmon", "monitor", "INFO", "START", f"resume at batch {next_batch}")
+        emit_event("feeder", "binance_gapmon", "monitor", "INFO", "START",
+                   f"resume at batch {last}")
 
         while not stop_event.is_set() and self._running:
-            envs = []
             try:
-                envs = self.event_store.next_from(next_batch, 256)
+                envs = self._fetch_envs(next_batch, 256)
             except Exception as e:
                 emit_event("feeder", "binance_gapmon", "monitor", "ERROR", "STORE_READ_ERR", repr(e))
                 time.sleep(0.5)
+                continue
 
             if not envs:
                 time.sleep(self.poll_delay_s)
                 continue
 
             last_bid = None
+            # Process each committed envelope in order
             for env in envs:
                 last_bid = env.batch_id
+                # Scan only Binance trades rows
                 for t in env.rows:
                     if t.provider != "binance" or t.stream != "trades":
                         continue
                     if t.seq is None:
                         continue
+
                     sym = t.symbol
                     seq = int(t.seq)
-                    last = self._get_last_seq(sym)
-                    if last is None:
-                        # first observation for this symbol; initialize and continue
+                    last_seq = self._get_last_seq(sym)
+
+                    if last_seq is None:
+                        # First sighting for the symbol
+                        if _BOOTSTRAP_LOOKBACK_IDS > 0 and seq > _BOOTSTRAP_LOOKBACK_IDS:
+                            # Optional: seed a lookback slice [seq-L, seq-1]
+                            try:
+                                self.planner.add_gap(Gap(
+                                    provider="binance",
+                                    symbol=sym,
+                                    start_id=seq - _BOOTSTRAP_LOOKBACK_IDS,
+                                    end_id=seq - 1,                # off-by-one safe
+                                    discovered_at_ns=t.ts_ns,
+                                    priority=0,
+                                ))
+                                emit_event("feeder", f"binance:{sym}", "planner", "INFO", "GAP_ENQUEUED",
+                                           f"{sym} [{seq - _BOOTSTRAP_LOOKBACK_IDS},{seq - 1}] -> 1 task(s)")
+                            except Exception as e:
+                                emit_event("feeder", f"binance:{sym}", "monitor", "ERROR", "GAP_ENQUEUE_ERR", repr(e))
                         self._set_last_seq(sym, seq)
                         continue
-                    if seq > last + 1:
-                        # gap detected: (last+1 ... seq-1)
-                        try:
-                            self.planner.add_gap(Gap(
-                                provider="binance",
-                                symbol=sym,
-                                start_id=last + 1,
-                                end_id=seq - 1,
-                                discovered_at_ns=t.ts_ns,
-                                priority=0,
-                            ))
-                        except Exception as e:
-                            emit_event("feeder", f"binance:{sym}", "monitor", "ERROR", "GAP_ENQUEUE_ERR", repr(e))
-                    # advance last
-                    if seq > last:
+
+                    # Gap detection: strictly greater than last+1
+                    if seq > last_seq + 1:
+                        gap_start = last_seq + 1
+                        gap_end   = seq - 1   # <-- off-by-one fix (do NOT include current seq)
+                        if gap_end >= gap_start:
+                            try:
+                                self.planner.add_gap(Gap(
+                                    provider="binance",
+                                    symbol=sym,
+                                    start_id=int(gap_start),
+                                    end_id=int(gap_end),
+                                    discovered_at_ns=t.ts_ns,
+                                    priority=0,
+                                ))
+                                emit_event("feeder", f"binance:{sym}", "planner", "INFO", "GAP_ENQUEUED",
+                                           f"{sym} [{gap_start},{gap_end}] -> 1 task(s)")
+                            except Exception as e:
+                                emit_event("feeder", f"binance:{sym}", "monitor", "ERROR", "GAP_ENQUEUE_ERR", repr(e))
+
+                    # advance last_seq
+                    if seq > last_seq:
                         self._set_last_seq(sym, seq)
 
             if last_bid is not None:
                 next_batch = last_bid + 1
-                # persist cursor
+                # persist batch cursor after successful processing
                 try:
                     self.journal.set_watermark(last_bid, _WM_BATCH_SCOPE)
                 except Exception:
