@@ -123,8 +123,6 @@ class TradingViewApiProducer(Producer):
                 if df is None or df.empty:
                     continue
 
-                print(f"DEBUG: fetched {len(df)} bars for {exch}:{sym} from {start_ts} to {end_ts}")
-
                 _start_ts = pd.Timestamp(start_ts).tz_localize(None)
                 _end_ts = pd.Timestamp(end_ts).tz_localize(None)
                 df = df[(df["datetime"] >= _start_ts) & (df["datetime"] <= _end_ts)]

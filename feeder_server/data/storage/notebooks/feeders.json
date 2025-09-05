@@ -3,8 +3,12 @@
     "provider": "binance",
     "name": "main",
     "symbols": ["btcusdt"],
-    "streams": ["trades"],
-    "autostart": false
+    "streams": ["trades", "backfill"],
+    "autostart": false,
+    "extra": {
+      "max_ids_per_task": 5000,
+      "backfill": {}
+      }
   },
   {
     "provider": "binance",
@@ -25,6 +29,6 @@
     "autostart": true,
     "extra": {
       "quotes": {"flush_interval_s": 0.25},
-      "bars":   {"batch_size": 5000, "flush_interval_s": 60.0}}
+      "bars":   {"batch_size": 5000, "flush_interval_s": 300.0}}
   }
 ]

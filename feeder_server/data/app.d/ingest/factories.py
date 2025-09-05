@@ -1,28 +1,53 @@
 # ingest/factories.py
 from __future__ import annotations
-from core.contracts import EventBus, Producer
-from .feeder_specs import FeederSpec
-from providers.binance.producer_ws import BinanceWsProducer
-from providers.tradingview.producer_ws import TradingViewWsProducer
-from providers.tradingview.producer_api import TradingViewApiProducer
+from typing import Optional, Iterable
+
+from core.contracts import EventBus, Producer, EventStore, JournalStore
 from sinks.registry import WriterRegistry
+from runtime.services import Services
+from runtime.backfill.planner import BackfillPlanner
+from runtime.gap_monitors.binance_gap_monitor import BinanceGapMonitor
+from .feeder_specs import FeederSpec
+
 import providers.tradingview as tv
 import providers.binance as bn
 
+
 PRODUCER_REGISTRY: dict[tuple[str,str], type[Producer]] = {
-    ("binance",     "trades"):  BinanceWsProducer,
-    ("tradingview", "quotes"):  TradingViewWsProducer,
-    ("tradingview", "bars"):    TradingViewApiProducer,
+    ("binance",     "trades"):      bn.producer_ws.BinanceWsProducer,
+    ("binance",     "backfill"):    bn.producer_backfill.BinanceBackfillProducer,
+    ("tradingview", "quotes"):      tv.producer_ws.TradingViewWsProducer,
+    ("tradingview", "bars"):        tv.producer_api.TradingViewApiProducer,
 }
 
 
-def create_producers(spec: FeederSpec, bus: EventBus) -> list[Producer]:
+def create_producers(spec: FeederSpec, bus: EventBus, services: Optional[Services] = None) -> list[Producer]:
+    """
+    Build Producer instances for a FeederSpec.
+
+    - Injects 'services' so we can share singletons (e.g., backfill planner) without importing dfb.services here.
+    - Only ('binance','backfill') needs special deps (planner + REST client).
+    - Other producers are instantiated with a forgiving constructor pattern.
+    """
     producers: list[Producer] = []
     for st in spec.streams:
-        stream_cfg = spec.extra.get(st, {})
-        cls = PRODUCER_REGISTRY[(spec.provider, st)]
+        key = (spec.provider, st)
+        cls = PRODUCER_REGISTRY.get(key)
         name = f"{spec.provider}:{st}:{spec.name}"
-        producers.append(cls(name, spec.symbols, bus, **stream_cfg))        # type: ignore
+        stream_cfg = spec.extra.get(st, {})
+
+        if key == ("binance", "backfill"):
+            # Reuse (or create) a singleton planner service
+            planner = services.try_get("backfill_planner")
+            if planner is None:
+                planner = BackfillPlanner(max_ids_per_task=spec.extra.get("max_ids_per_task", 5000))
+                services.register("backfill_planner", planner)
+
+            # REST client (API key can come from spec.extra or env)
+            rest = bn.rest_client.BinanceRest(api_key=spec.extra.get("api_key"))
+            producers.append(cls(name=name, bus=bus, planner=planner, rest=rest))
+        else:
+            producers.append(cls(name, spec.symbols, bus, **stream_cfg))        # type: ignore
     return producers
 
 
@@ -50,3 +75,30 @@ def register_writers() -> WriterRegistry:
         flatten=bn.adapter.flatten_trades
     )
     return reg
+
+
+def ensure_runtime_services(
+        specs: Iterable,
+        services: Services,
+        *,
+        event_store: EventStore,
+        journal: JournalStore,
+        start_monitors: bool = True,
+) -> None:
+    """Ensure shared control-plane services exist for the configured specs."""
+    # Backfill planner (shared)
+    planner = services.try_get("backfill_planner")
+    if planner is None:
+        planner = BackfillPlanner(max_ids_per_task=5000)
+        services.register("backfill_planner", planner)
+
+    # If any Binance backfill stream is present, ensure single gap monitor
+    needs_binance_gap = any(
+        (getattr(s, "provider", None) == "binance") and ("backfill" in getattr(s, "streams", []))
+        for s in specs
+    )
+    if needs_binance_gap and services.try_get("gap_monitor:binance") is None:
+        bm = BinanceGapMonitor(event_store=event_store, journal=journal, planner=planner)
+        services.register("gap_monitor:binance", bm)
+        if start_monitors:
+            bm.start()

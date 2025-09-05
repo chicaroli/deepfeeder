@@ -5,21 +5,24 @@ from core.contracts import EventBus, DhSink, JournalStore, EventStore, Producer
 from runtime.dh_thread import spawn
 from runtime.eventlog import emit_event
 import os
+
 DEBUG_IO = os.getenv("DF_DEBUG_IO", "0") not in ("0", "false", "False")
 
 from runtime.consumers import dh_consumer_loop, journal_consumer_loop
 from .feeder_specs import FeederSpec
 
+
 class FeedManager:
     """Coordinates the ingestion pipeline (producers + DH/Journal consumers).
     """
+
     def __init__(
-        self,
-        *,
-        bus: EventBus,
-        event_store: EventStore,
-        journal: Optional[JournalStore],
-        dh_sink: Optional[DhSink],
+            self,
+            *,
+            bus: EventBus,
+            event_store: EventStore,
+            journal: Optional[JournalStore],
+            dh_sink: Optional[DhSink],
     ) -> None:
         self.bus = bus
         self.event_store = event_store
@@ -34,6 +37,7 @@ class FeedManager:
             self._threads["dh_consumer"] = spawn(
                 "feeder", "core", "dh_consumer", dh_consumer_loop, self.bus, self.dh_sink
             )
+            emit_event("feeder", "CORE-DH", "consumer", "INFO", "START", "DH consumer started")
         if self.journal is not None and "journal_consumer" not in self._threads:
             self._threads["journal_consumer"] = spawn(
                 "feeder",
@@ -44,6 +48,7 @@ class FeedManager:
                 self.journal,
                 self.bus,
             )
+            emit_event("feeder", "CORE-Journal", "consumer", "INFO", "START", "Journal consumer started")
 
     def stop_consumers(self, timeout: float = 2.0) -> None:
         for key, t in list(self._threads.items()):
@@ -56,6 +61,7 @@ class FeedManager:
                 pass
             finally:
                 self._threads.pop(key, None)
+                emit_event("feeder", key, "consumer", "INFO", "STOP", f"{key} stopped")
 
     # -------------------- Producers registry --------------------
     def register(self, producer: Producer) -> None:
@@ -90,13 +96,8 @@ class FeedManager:
         for n in targets:
             self.start_producer(n)
 
-    def stop_all_producers(
-        self,
-        names: Optional[Iterable[str]] = None,
-        *,
-        join: bool = False,
-        timeout: Optional[float] = None,
-    ) -> None:
+    def stop_all_producers(self, names: Optional[Iterable[str]] = None, *, join: bool = False,
+                           timeout: Optional[float] = None) -> None:
         targets = list(names) if names is not None else self.list_producers()
         to_join: list[Producer] = []
         for n in targets:

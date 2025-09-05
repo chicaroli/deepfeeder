@@ -42,3 +42,39 @@ def get_status_writer():
 def get_status_table():
     # last row per (provider, feeder)
     return _STATUS_WRITER.table.last_by(["provider", "feeder"])
+
+# Backfill gaps and tasks (for UI + producers)
+_BACKFILL_GAPS_WRITER = DynamicTableWriter({
+    "provider": dht.string,
+    "symbol": dht.string,
+    "start_id": dht.long,
+    "end_id": dht.long,
+    "discovered_at_ns": dht.long,
+    "status": dht.string,      # pending, planned, running, done, failed
+    "priority": dht.long,
+})
+
+_BACKFILL_TASKS_WRITER = DynamicTableWriter({
+    "task_id": dht.string,
+    "provider": dht.string,
+    "symbol": dht.string,
+    "start_id": dht.long,
+    "end_id": dht.long,
+    "created_at_ns": dht.long,
+    "status": dht.string,      # pending, running, done, failed
+    "try_count": dht.long,
+    "last_error": dht.string,
+})
+
+def get_backfill_gaps_writer():
+    return _BACKFILL_GAPS_WRITER
+
+def get_backfill_tasks_writer():
+    return _BACKFILL_TASKS_WRITER
+
+def get_backfill_gaps_table():
+    return _BACKFILL_GAPS_WRITER.table
+
+def get_backfill_tasks_table():
+    return _BACKFILL_TASKS_WRITER.table
+

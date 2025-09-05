@@ -1,10 +1,12 @@
 # storage/eventstore_duckdb.py
 from __future__ import annotations
 from typing import List
-import threading
+import time, threading
 import duckdb
 import pyarrow as pa
 from core.contracts import Envelope, EventStore, Tick
+from runtime.eventlog import emit_event
+
 
 # ---- Arrow codecs  ----------------------------------------------------------
 def _ticks_to_arrow(ticks: List[Tick]) -> pa.Table:
@@ -50,10 +52,24 @@ def _ipc_bytes_to_table(data: bytes) -> pa.Table:
 
 # ---- DuckDB EventStore (sequence-based IDs) ---------------------------------
 class DuckDbEventStore(EventStore):
-    def __init__(self, path: str):
+    def __init__(self, path: str, *,
+                 prune_interval_s: float = 600,
+                 prune_safety_batches: int = 100,
+                 vacuum_every_n_prunes: int = 6):
         self._lock = threading.RLock()
         self.con = duckdb.connect(path)
         self._ensure_schema()
+
+        # --- WAL retention knobs (env overrides) ---------------------------
+        # Prune at most every PRUNE_INTERVAL_S seconds
+        self._prune_interval_s = prune_interval_s
+        # Keep a safety window of batches (don’t prune right up to the commit head)
+        self.prune_safety_batches = prune_safety_batches
+        # Run VACUUM every N prunes (CHECKPOINT runs every prune)
+        self.vacuum_every_n_prunes = vacuum_every_n_prunes
+        self._last_prune_ts: float = 0.0
+        self._last_pruned_batch: int = 0
+        self._prune_count: int = 0
 
     def _ensure_schema(self) -> None:
         # Tables
@@ -128,6 +144,7 @@ class DuckDbEventStore(EventStore):
     def mark_committed(self, batch_id: int) -> None:
         with self._lock:
             self.con.execute("UPDATE acks SET last_committed = ?", [int(batch_id)])
+            self._maybe_prune_locked()
 
     def max_batch_id(self) -> int:
         with self._lock:
@@ -135,3 +152,60 @@ class DuckDbEventStore(EventStore):
         if not row or row[0] is None:
             return 0
         return int(row[0])
+
+    def prune_upto(self, batch_id: int) -> int:
+        """
+         Delete envelopes with batch_id <= specified cutoff (inclusive).
+         Returns the number of rows deleted.
+         """
+        with self._lock:
+            return self._prune_upto_locked(int(batch_id))
+
+    # --------------------- internal retention helpers ----------------------
+    def _maybe_prune_locked(self) -> None:
+        """Prune WAL up to (last_committed - safety), at most every _prune_interval_s seconds."""
+        if self._prune_interval_s <= 0:
+            return  # disabled
+        now = time.time()
+        if (now - self._last_prune_ts) < self._prune_interval_s:
+            return
+        cutoff = int(self.last_committed()) - self.prune_safety_batches
+        if cutoff <= 0 or cutoff <= self._last_pruned_batch:
+            self._last_prune_ts = now
+            return
+        deleted = self._prune_upto_locked(cutoff)
+        self._last_pruned_batch = cutoff
+        self._last_prune_ts = now
+        self._prune_count += 1
+        # Periodic full compaction (CHECKPOINT runs inside _prune_upto_locked)
+        if self._prune_count % self.vacuum_every_n_prunes == 0:
+            try:
+                self.con.execute("VACUUM")
+            except Exception:
+                pass
+
+    def _prune_upto_locked(self, cutoff_inclusive: int) -> int:
+       """Internal: perform the DELETE + CHECKPOINT under the caller's lock."""
+       # Count first (for logging/metrics)
+       row = self.con.execute(
+           "SELECT COUNT(*) FROM event_store WHERE batch_id <= ?",
+           [int(cutoff_inclusive)]
+       ).fetchone()
+       n = int(row[0]) if row and row[0] is not None else 0
+       if n == 0:
+           return 0
+       self.con.execute("BEGIN")
+       try:
+           self.con.execute("DELETE FROM event_store WHERE batch_id <= ?", [int(cutoff_inclusive)])
+           self.con.execute("COMMIT")
+       except Exception:
+           self.con.execute("ROLLBACK")
+           raise
+       # Merge free pages; lighter than VACUUM and safe to do every prune
+       try:
+           self.con.execute("CHECKPOINT")
+           emit_event("feeder", "CORE", "event_store", "INFO", "PRUNE",
+                      f"pruned {n} envelopes up to batch_id {cutoff_inclusive}")
+       except Exception:
+           pass
+       return n

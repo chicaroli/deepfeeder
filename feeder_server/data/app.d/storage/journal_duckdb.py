@@ -1,8 +1,9 @@
 # storage/journal_duckdb.py
 from __future__ import annotations
-from typing import List, Optional
+from typing import Optional, Set, List, Iterator
 import duckdb
 from core.contracts import JournalStore, Tick, natural_key
+import json
 
 class DuckDbJournal(JournalStore):
     def __init__(self, path: str):
@@ -76,3 +77,79 @@ class DuckDbJournal(JournalStore):
           INSERT INTO watermarks(scope, last_offset) VALUES (?, ?)
           ON CONFLICT(scope) DO UPDATE SET last_offset=excluded.last_offset
         """, [scope, int(value)])
+
+    def stream_ticks_since(
+            self,
+            since_ts_ns: int,
+            *,
+            provider_filter: Optional[Set[str]] = None,
+            stream_filter: Optional[Set[str]] = None,
+            page_rows: int = 20_000,
+    ) -> Iterator[List[Tick]]:
+        """
+        Stream Tick rows from journal_hot starting at since_ts_ns, ordered by (ts_ns, rowid),
+        yielding pages of up to 'page_rows' items. No batch_id is required.
+        """
+        last_ts = int(since_ts_ns)
+        last_rowid = -1
+
+        where_extra = []
+        params_extra: List[object] = []
+        if provider_filter:
+            where_extra.append(f"provider IN ({','.join('?' for _ in provider_filter)})")
+            params_extra.extend(list(provider_filter))
+        if stream_filter:
+            where_extra.append(f"stream IN ({','.join('?' for _ in stream_filter)})")
+            params_extra.extend(list(stream_filter))
+        where_extra_sql = (" AND " + " AND ".join(where_extra)) if where_extra else ""
+
+        while True:
+            rs = self.con.execute(
+                f"""
+                SELECT rowid, provider, stream, symbol, ts_ns, seq, is_final, payload
+                FROM journal_hot
+                WHERE ((ts_ns > ?) OR (ts_ns = ? AND rowid > ?)) {where_extra_sql}
+                ORDER BY ts_ns ASC, rowid ASC
+                LIMIT ?
+                """,
+                [last_ts, last_ts, last_rowid] + params_extra + [int(page_rows)],
+            ).fetchall()
+
+            if not rs:
+                break
+
+            page: List[Tick] = []
+            for rowid, prov, stream, sym, ts_ns, seq, is_final, payload in rs:
+                # --- normalize payload to dict ---------------------------------
+                if payload is None:
+                    payload_norm = {}
+                elif isinstance(payload, (bytes, bytearray)):
+                    try:
+                        payload_norm = json.loads(payload.decode("utf-8"))
+                    except Exception:
+                        payload_norm = {"raw": payload.decode("utf-8", "replace")}
+                elif isinstance(payload, str):
+                    try:
+                        payload_norm = json.loads(payload)
+                    except Exception:
+                        payload_norm = {"raw": payload}
+                else:
+                    # duckdb might already return a dict-like for JSON; accept it
+                    payload_norm = payload
+
+                page.append(
+                    Tick(
+                        provider=str(prov),
+                        stream=str(stream),
+                        symbol=str(sym),
+                        ts_ns=int(ts_ns),
+                        seq=(None if seq is None or int(seq) < 0 else int(seq)),
+                        payload=payload_norm,  # ← dict
+                        is_final=bool(is_final),
+                    )
+                )
+                last_ts = int(ts_ns)
+                last_rowid = int(rowid)
+
+            yield page
+

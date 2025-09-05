@@ -89,7 +89,7 @@ def journal_consumer_loop(stop_event, event_store: EventStore, journal: JournalS
 
             # 2) If none pending in store, drain the live bus (best-effort)
             if not envs:
-                envs = bus.drain_for_journal(256, 0.2)
+                envs = bus.drain_for_journal(1024, 0.2)
                 if not envs:
                     # idle heartbeat every ~5s
                     now = time.time()

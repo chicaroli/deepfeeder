@@ -15,6 +15,8 @@ from .schema import (
     tv_ohlcv_1m,
     tv_ohlcv_5m,
 )
+from .producer_ws import TradingViewWsProducer
+from  .producer_api import TradingViewApiProducer
 
 __all__ = [
     # Adapter functions
@@ -33,4 +35,8 @@ __all__ = [
     "tv_bars_filled",
     "tv_ohlcv_1m",
     "tv_ohlcv_5m",
+
+    # Producers
+    "TradingViewWsProducer",
+    "TradingViewApiProducer",
 ]

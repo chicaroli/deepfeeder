@@ -10,6 +10,15 @@ from .schema import (
     binance_ohlcv_5m,
     binance_ohlcv_5m_filled,
 )
+from .producer_ws import (
+    BinanceWsProducer,
+)
+from .producer_backfill import (
+    BinanceBackfillProducer,
+)
+from .rest_client import (
+    BinanceRest,
+)
 
 __all__ = [
     # Adapter functions
@@ -23,4 +32,11 @@ __all__ = [
     "binance_ohlcv_1m_filled",
     "binance_ohlcv_5m",
     "binance_ohlcv_5m_filled",
+
+    # Producer classes
+    "BinanceWsProducer",
+    "BinanceBackfillProducer",
+
+    # REST client
+    "BinanceRest",
 ]

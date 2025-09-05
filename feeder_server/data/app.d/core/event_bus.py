@@ -19,8 +19,12 @@ class EventBus(EventBusProto):
         self._max = max_envelopes
         self._lock = th.RLock()
         self._cv = th.Condition(self._lock)
-        self._dh_cursor = -1
-        self._jr_cursor = event_store.last_committed()
+        _last_commit = event_store.last_committed()
+        self._jr_cursor = _last_commit
+        self._dh_cursor = _last_commit
+
+    def set_dh_cursor(self, batch_id: int) -> None:
+        self._dh_cursor = int(batch_id)
 
     def publish(self, rows: list[Tick]) -> int:
         produced_ns = time.time_ns()

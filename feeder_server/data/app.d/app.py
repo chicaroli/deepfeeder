@@ -7,6 +7,7 @@ only performed via explicit function calls.
 """
 
 import os
+import time
 from datetime import datetime, timezone
 
 
@@ -40,10 +41,10 @@ _log(f"env DEEPFEEDER_AUTOSTART={autostart_env!r} DEEPFEEDER_REGISTER_UI={regist
 import deepfeeder as dfb
 import ui.dashboard
 from runtime.eventlog import emit_event
+from runtime.warmup import hydrate_dh_from_journal
 from ingest.feed_manager import FeedManager
 from ingest.feeder_specs import load_feeder_specs
-from ingest.factories import create_producers
-
+from ingest.factories import create_producers, ensure_runtime_services
 
 # --- optional UI registration ----
 if register_ui_env not in ("0", "false", "False"):
@@ -56,6 +57,7 @@ else:
     _log("UI dashboard registration disabled by environment", name="UI_REGISTER")
 
 
+
 # --- autostart orchestrator and consumers ---
 try:
     bus         = dfb.get_service("event_bus")
@@ -63,42 +65,71 @@ try:
     journal     = dfb.get_service("journal_store")
     dh_sink     = dfb.get_service("dh_sink")
 
-    # register orchestrator service for UI access
-    fm = FeedManager(bus=bus, event_store=event_store, journal=journal, dh_sink=dh_sink)
-    # register feed manager services (new + legacy alias)
+    # register Manager service for UI access --------------------------------------------
     try:
+        fm = FeedManager(bus=bus, event_store=event_store, journal=journal, dh_sink=dh_sink)
         dfb.services.register("feed_manager", fm)
-        _log("FeedManager service registered (dfb.services.get('feed_manager'))", name="UI_REGISTER")
+        _log(f"FeedManager service registered: {fm}", name="UI_REGISTER")
     except Exception as e:
-        _log(f"FeedManager service registration skipped (error): {e!r}", name="UI_REGISTER", level="ERROR")
-
-    fm.start_consumers()  # ensure DH / Journal consumers are running
-    _log("FeedManager consumers started", name="CORE")
+        fm = None
+        _log(f"FeedManager service registration failed: {e!r}", name="UI_REGISTER", level="ERROR")
 
 
-    # --- Load feeder specs
+    # Warm replay into DH from Journal (if enabled and possible) ------------------------
+    WINDOW_DAYS = 2
+    since = time.time_ns() - WINDOW_DAYS * 24 * 60 * 60 * 1_000_000_000
+    rows, last_ts = hydrate_dh_from_journal(
+        journal=journal,
+        dh_sink=dh_sink,
+        since_ts_ns=since,
+        provider_filter=None,  # or {"binance","tradingview"}
+        stream_filter=None,  # or {"trades","quotes","bars"}
+        page_rows=20_000,
+    )
+    _log(f"Warmup wrote {rows} rows from Journal (since_ts_ns={since})", name="WARMUP")
+
+    if last_ts and last_ts > 0:
+        # Set DH replay cursor so it does NOT replay the WAL
+        journal.set_watermark(last_ts, "dh_consumer:cursor")
+
+    # Set the bus’ DH cursor from the watermark (fallback to committed tail) ------------
+    dh_start = journal.get_watermark("dh_consumer:cursor")
+    if dh_start is None:
+        dh_start = event_store.last_committed()
+    bus.set_dh_cursor(int(dh_start))
+
+    # Start consumers (DH + Journal) ----------------------------------------------------
+    try:
+        fm.start_consumers()
+        _log("FeedManager consumers started", name="CORE")
+    except Exception as e:
+        _log(f"FeedManager consumers failed to start: {e!r}", name="CORE", level="ERROR")
+
+
+    # Load feeder specs -----------------------------------------------------------------
     specs_path = os.getenv("DEEPFEEDER_FEEDERS_JSON", "/data/storage/notebooks/feeders.json")
     try:
         specs = load_feeder_specs(specs_path)
+        dfb.services.register("feeder_specs_path", specs_path)
     except Exception as e:
         _log(f"Failed to load feeder specs from {specs_path}: {e!r}", name="FEEDERS", level="ERROR")
         specs = []
-    # expose specs path (optional) for UI reload logic
-    try:
-        dfb.services.register("feeder_specs_path", specs_path)
-    except Exception:
-        pass
 
-    # --- Register producers
+
+    # Ensure runtime services -----------------------------------------------------------
+    ensure_runtime_services(specs, dfb.services, event_store=event_store, journal=journal, start_monitors=True)
+
+
+    # Register producers ----------------------------------------------------------------
     registered = []
     for spec in specs:
-        for p in create_producers(spec, bus):
+        for p in create_producers(spec, bus, services=dfb.services):
             fm.register(p)
             registered.append((spec, p))
     _log(f"Producers: {fm.list_producers()}", name="FEEDERS")
 
 
-    # Autostart according to your file
+    # Autostart according to your file --------------------------------------------------
     if autostart_env not in ("0", "false", "False"):
         try:
             _log("AUTOSTART enabled: starting configured _feeders...", name="AUTOSTART")
