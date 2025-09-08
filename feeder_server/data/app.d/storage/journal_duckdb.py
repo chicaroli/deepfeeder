@@ -1,26 +1,35 @@
 # storage/journal_duckdb.py
 from __future__ import annotations
 from typing import Optional, Set, List, Iterator
+import threading
 import duckdb
 from core.contracts import JournalStore, Tick, natural_key, Envelope
 import json
 
 class DuckDbJournal(JournalStore):
+    """DuckDB-backed JournalStore using one shared connection protected by an RLock.
+
+    All DB access is serialized to avoid concurrent query errors on a single duckdb.Connection.
+    Streaming methods fetch pages under the lock (fetchall) and release the lock before yielding.
+    """
+
     def __init__(self, path: str):
         self.con = duckdb.connect(path)
+        # Re-entrant lock to serialize access to the shared duckdb connection
+        self._lock = threading.RLock()
         # natural-key index for idempotency (64-bit hash OK for speed; here use text tuple for clarity)
         self.con.execute("""
-          CREATE TABLE IF NOT EXISTS key_index(
-            provider TEXT, stream TEXT, symbol TEXT, nat_key TEXT,
-            PRIMARY KEY (provider, stream, symbol, nat_key)
-          );
+            CREATE TABLE IF NOT EXISTS key_index(
+                provider TEXT, stream TEXT, symbol TEXT, nat_key TEXT,
+                PRIMARY KEY (provider, stream, symbol, nat_key)
+            );
         """)
         # hot table (flatten minimally; you can widen later)
         self.con.execute("""
-          CREATE TABLE IF NOT EXISTS journal_hot(
-            provider TEXT, stream TEXT, symbol TEXT,
-            ts_ns BIGINT, seq BIGINT, is_final BOOLEAN, payload JSON, batch_id BIGINT
-          );
+            CREATE TABLE IF NOT EXISTS journal_hot(
+                provider TEXT, stream TEXT, symbol TEXT,
+                ts_ns BIGINT, seq BIGINT, is_final BOOLEAN, payload JSON, batch_id BIGINT
+            );
         """)
         # # add batch_id if missing
         # cols = [r[1] for r in self.con.execute("PRAGMA table_info('journal_hot')").fetchall()]
@@ -32,9 +41,9 @@ class DuckDbJournal(JournalStore):
         self.con.execute("CREATE INDEX IF NOT EXISTS jh_p_s_idx   ON journal_hot(provider,stream)")
 
         self.con.execute("""
-          CREATE TABLE IF NOT EXISTS watermarks(
-            scope TEXT PRIMARY KEY, last_offset BIGINT
-          );
+            CREATE TABLE IF NOT EXISTS watermarks(
+                scope TEXT PRIMARY KEY, last_offset BIGINT
+            );
         """)
 
     def append_batch(self, ticks: List[Tick]) -> int:
@@ -45,22 +54,23 @@ class DuckDbJournal(JournalStore):
                  -1 if t.seq is None else int(t.seq), bool(t.is_final), t.payload) for t in ticks]
         keys = [(t.provider, t.stream, t.symbol, str(natural_key(t))) for t in ticks]
         # Insert-ignore keys, then insert only new rows by left-joining on keys
-        self.con.execute("BEGIN")
-        try:
-            self.con.executemany("""
-              INSERT INTO key_index(provider, stream, symbol, nat_key)
-              VALUES (?, ?, ?, ?)
-              ON CONFLICT(provider, stream, symbol, nat_key) DO NOTHING
-            """, keys)
-            # Insert all rows; duplicates are harmless but wasteful. You can filter by checking inserted rowcount above if desired.
-            self.con.executemany("""
-              INSERT INTO journal_hot(provider, stream, symbol, ts_ns, seq, is_final, payload)
-              VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, rows)
-            self.con.execute("COMMIT")
-        except Exception:
-            self.con.execute("ROLLBACK")
-            raise
+        with self._lock:
+            self.con.execute("BEGIN")
+            try:
+                self.con.executemany("""
+                    INSERT INTO key_index(provider, stream, symbol, nat_key)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(provider, stream, symbol, nat_key) DO NOTHING
+                """, keys)
+                # Insert all rows; duplicates are harmless but wasteful. You can filter by checking inserted rowcount above if desired.
+                self.con.executemany("""
+                    INSERT INTO journal_hot(provider, stream, symbol, ts_ns, seq, is_final, payload)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, rows)
+                self.con.execute("COMMIT")
+            except Exception:
+                self.con.execute("ROLLBACK")
+                raise
         return len(rows)
 
     def append_envelope(self, env: Envelope) -> int:
@@ -72,24 +82,26 @@ class DuckDbJournal(JournalStore):
              bool(t.is_final), t.payload, int(env.batch_id))
             for t in env.rows
         ]
-        self.con.execute("BEGIN")
-        try:
-            self.con.executemany("""
-              INSERT INTO journal_hot(provider, stream, symbol, ts_ns, seq, is_final, payload, batch_id)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, rows)
-            self.con.execute("COMMIT")
-        except Exception:
-            self.con.execute("ROLLBACK");
-            raise
+        with self._lock:
+            self.con.execute("BEGIN")
+            try:
+                self.con.executemany("""
+                    INSERT INTO journal_hot(provider, stream, symbol, ts_ns, seq, is_final, payload, batch_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, rows)
+                self.con.execute("COMMIT")
+            except Exception:
+                self.con.execute("ROLLBACK")
+                raise
         return len(rows)
 
     def load_recent(self, since_ts_ns: int, columns: Optional[List[str]] = None) -> List[Tick]:
         cols = "provider, stream, symbol, ts_ns, seq, is_final, payload"
-        recs = self.con.execute(
-            f"SELECT {cols} FROM journal_hot WHERE ts_ns >= ? ORDER BY ts_ns",
-            [int(since_ts_ns)]
-        ).fetchall()
+        with self._lock:
+            recs = self.con.execute(
+                f"SELECT {cols} FROM journal_hot WHERE ts_ns >= ? ORDER BY ts_ns",
+                [int(since_ts_ns)]
+            ).fetchall()
         out: List[Tick] = []
         for p,sym_stream,smb,ts,seq,isf,payload in recs:
             out.append(Tick(provider=p, stream=sym_stream, symbol=smb,
@@ -99,14 +111,16 @@ class DuckDbJournal(JournalStore):
         return out
 
     def get_watermark(self, scope: str = "global") -> int:
-        row = self.con.execute("SELECT last_offset FROM watermarks WHERE scope = ?", [scope]).fetchone()
+        with self._lock:
+            row = self.con.execute("SELECT last_offset FROM watermarks WHERE scope = ?", [scope]).fetchone()
         return 0 if row is None else int(row[0])
 
     def set_watermark(self, value: int, scope: str = "global") -> None:
-        self.con.execute("""
-          INSERT INTO watermarks(scope, last_offset) VALUES (?, ?)
-          ON CONFLICT(scope) DO UPDATE SET last_offset=excluded.last_offset
-        """, [scope, int(value)])
+        with self._lock:
+            self.con.execute("""
+                INSERT INTO watermarks(scope, last_offset) VALUES (?, ?)
+                ON CONFLICT(scope) DO UPDATE SET last_offset=excluded.last_offset
+            """, [scope, int(value)])
 
     def stream_ticks_since(
             self,
@@ -134,16 +148,18 @@ class DuckDbJournal(JournalStore):
         where_extra_sql = (" AND " + " AND ".join(where_extra)) if where_extra else ""
 
         while True:
-            rs = self.con.execute(
-                f"""
-                SELECT rowid, provider, stream, symbol, ts_ns, seq, is_final, payload
-                FROM journal_hot
-                WHERE ((ts_ns > ?) OR (ts_ns = ? AND rowid > ?)) {where_extra_sql}
-                ORDER BY ts_ns ASC, rowid ASC
-                LIMIT ?
-                """,
-                [last_ts, last_ts, last_rowid] + params_extra + [int(page_rows)],
-            ).fetchall()
+            # fetch the next page under the lock, then release while we normalize/yield
+            with self._lock:
+                rs = self.con.execute(
+                    f"""
+                    SELECT rowid, provider, stream, symbol, ts_ns, seq, is_final, payload
+                    FROM journal_hot
+                    WHERE ((ts_ns > ?) OR (ts_ns = ? AND rowid > ?)) {where_extra_sql}
+                    ORDER BY ts_ns ASC, rowid ASC
+                    LIMIT ?
+                    """,
+                    [last_ts, last_ts, last_rowid] + params_extra + [int(page_rows)],
+                ).fetchall()
 
             if not rs:
                 break
@@ -184,24 +200,27 @@ class DuckDbJournal(JournalStore):
             yield page
 
     def next_committed_from(self, start_batch_inclusive: int, limit: int) -> list[Envelope]:
-        start = int(start_batch_inclusive);
+        start = int(start_batch_inclusive)
         lim = int(limit)
-        bids = self.con.execute(
-            "SELECT DISTINCT batch_id FROM journal_hot "
-            "WHERE batch_id IS NOT NULL AND batch_id >= ? "
-            "ORDER BY batch_id ASC LIMIT ?",
-            [start, lim]
-        ).fetchall()
+        # read bids under lock
+        with self._lock:
+            bids = self.con.execute(
+                "SELECT DISTINCT batch_id FROM journal_hot "
+                "WHERE batch_id IS NOT NULL AND batch_id >= ? "
+                "ORDER BY batch_id ASC LIMIT ?",
+                [start, lim]
+            ).fetchall()
         if not bids:
             return []
 
         out: list[Envelope] = []
         for (bid,) in bids:
-            rs = self.con.execute(
-                "SELECT provider, stream, symbol, ts_ns, seq, is_final, payload "
-                "FROM journal_hot WHERE batch_id = ? ORDER BY ts_ns ASC",
-                [int(bid)]
-            ).fetchall()
+            with self._lock:
+                rs = self.con.execute(
+                    "SELECT provider, stream, symbol, ts_ns, seq, is_final, payload "
+                    "FROM journal_hot WHERE batch_id = ? ORDER BY ts_ns ASC",
+                    [int(bid)]
+                ).fetchall()
             if not rs:
                 continue
 
@@ -243,4 +262,3 @@ class DuckDbJournal(JournalStore):
                 rows=rows,
             ))
         return out
-

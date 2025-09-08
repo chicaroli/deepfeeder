@@ -1,6 +1,6 @@
 # providers/binance/adapter.py
 from __future__ import annotations
-from typing import Dict, List
+from typing import Dict, List, Optional
 from core.contracts import Tick
 from datetime import datetime, timezone
 from deephaven.time import to_j_instant
@@ -45,7 +45,46 @@ def trade_json_to_tick(msg: dict) -> Tick:
         payload={
             "Price": float(msg["p"]),
             "Quantity": float(msg["q"]),
+            "BuyerID": int(msg.get("b", 0)),
+            "SellerID": int(msg.get("a", 0)),
             "IsBuyerMaker": bool(msg.get("m", False)),
+        },
+        is_final=True,
+    )
+
+
+
+def rest_trade_json_to_tick(r: dict, symbol: Optional[str] = None) -> Tick:
+    """Parse a REST-style Binance trade row into a Tick using the canonical payload.
+
+    Expected REST shapes include keys like:
+      - id (int), price (str), qty (str), time (ms, int), isBuyerMaker (bool)
+    This function is defensive and will try common fallbacks used by Binance.
+    """
+    # trade id fallbacks
+    tid = int( r.get('id') or r.get('tradeId') or r.get('t'))
+
+    # timestamps in ms
+    ts_ms = r.get("time") or r.get("T") or r.get("tradeTime") or r.get("timestamp")
+    ts_ns = int(ts_ms) * 1_000_000 if ts_ms is not None else 0
+
+    price = r.get("price") or r.get("p")
+    qty = r.get("qty") or r.get("q")
+    is_buyer_maker = r.get("isBuyerMaker") or r.get("m", False)
+    sym = (symbol or r.get("symbol") or r.get("s") or "").upper()
+
+    return Tick(
+        provider="binance",
+        stream="trades",
+        symbol=sym,
+        ts_ns=ts_ns,
+        seq=tid,
+        payload={
+            "Price": float(price) if price is not None else 0.0,
+            "Quantity": float(qty) if qty is not None else 0.0,
+            "BuyerID": int(r.get("b", 0)),
+            "SellerID": int(r.get("a", 0)),
+            "IsBuyerMaker": bool(is_buyer_maker),
         },
         is_final=True,
     )

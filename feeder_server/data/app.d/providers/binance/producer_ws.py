@@ -72,7 +72,9 @@ class BinanceWsProducer(Producer):
         now = time.time()
         if force or len(self._batch) >= self.batch_size or (now - self._last_flush) >= self.flush_interval_s:
             try:
-                self.bus.publish(self._batch)
+                # Publish a copy to avoid sharing the internal list object with consumers;
+                # consumers or async queues may retain the reference while we clear it.
+                self.bus.publish(list(self._batch))
             finally:
                 self._batch.clear()
                 self._last_flush = now

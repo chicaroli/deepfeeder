@@ -1,5 +1,7 @@
 # providers/binance/producer_backfill.py
 from __future__ import annotations
+from email import message
+import json
 import time
 from typing import Optional, List
 from dataclasses import dataclass
@@ -9,6 +11,7 @@ from runtime.eventlog import emit_event
 from core.contracts import Producer, EventBus, Tick
 from runtime.backfill.planner import BackfillPlanner, Task
 from .rest_client import BinanceRest
+from .adapter import trade_json_to_tick, rest_trade_json_to_tick
 
 # simple token-bucket style limiter
 class _RateLimiter:
@@ -120,20 +123,23 @@ class BinanceBackfillProducer(Producer):
             # 2) normalize and HARD-CAP to end_id
             ticks = []
             for r in rows:
-                tid = int(r["id"])
+                d = r.get("data", r)  # accept wrapper or plain dict
+
+                # defensive trade id extraction (support REST 'id' or WS 't')
+                try:
+                    tid = int(d.get("id") or d.get("t") or d.get("tradeId") or 0)
+                except Exception:
+                    # skip rows without usable id
+                    continue
+
                 if tid <= last_id:
                     continue
                 if tid > end:
                     break  # stop at the first row beyond end
-                ts_ns = int(r["time"]) * 1_000_000
-                ticks.append(Tick(
-                    provider="binance", stream="trades", symbol=task.symbol,
-                    ts_ns=ts_ns, seq=tid,
-                    payload={"price": r["price"], "qty": r["qty"],
-                             "isBuyerMaker": r["isBuyerMaker"],
-                             "source": "rest_backfill", "task_id": task.task_id},
-                    is_final=True,
-                ))
+
+                # Use the canonical REST/WS parser so both shapes map to the same Tick
+                tick = rest_trade_json_to_tick(d, symbol=task.symbol)
+                ticks.append(tick)
                 last_id = tid
 
             if ticks:

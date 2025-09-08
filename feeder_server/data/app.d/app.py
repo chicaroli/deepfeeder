@@ -88,9 +88,18 @@ try:
     )
     _log(f"Warmup wrote {rows} rows from Journal (since_ts_ns={since})", name="WARMUP")
 
-    if last_ts and last_ts > 0:
-        # Set DH replay cursor so it does NOT replay the WAL
-        journal.set_watermark(last_ts, "dh_consumer:cursor")
+    # After warmup, set DH replay cursor so it does NOT replay the WAL.
+    # Use the durable event_store's last_committed batch id (not the timestamp returned by warmup).
+    try:
+        last_committed = event_store.last_committed()
+        journal.set_watermark(int(last_committed), "dh_consumer:cursor")
+    except Exception:
+        # best-effort: if we cannot read event_store, fall back to previous behavior
+        try:
+            if last_ts and last_ts > 0:
+                journal.set_watermark(last_ts, "dh_consumer:cursor")
+        except Exception:
+            pass
 
     # Set the bus’ DH cursor from the watermark (fallback to committed tail) ------------
     dh_start = journal.get_watermark("dh_consumer:cursor")

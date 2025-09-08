@@ -136,8 +136,6 @@ class BinanceGapMonitor:
                                     discovered_at_ns=t.ts_ns,
                                     priority=0,
                                 ))
-                                emit_event("feeder", f"binance:{sym}", "planner", "INFO", "GAP_ENQUEUED",
-                                           f"{sym} [{seq - _BOOTSTRAP_LOOKBACK_IDS},{seq - 1}] -> 1 task(s)")
                             except Exception as e:
                                 emit_event("feeder", f"binance:{sym}", "monitor", "ERROR", "GAP_ENQUEUE_ERR", repr(e))
                         self._set_last_seq(sym, seq)
@@ -157,8 +155,6 @@ class BinanceGapMonitor:
                                     discovered_at_ns=t.ts_ns,
                                     priority=0,
                                 ))
-                                emit_event("feeder", f"binance:{sym}", "planner", "INFO", "GAP_ENQUEUED",
-                                           f"{sym} [{gap_start},{gap_end}] -> 1 task(s)")
                             except Exception as e:
                                 emit_event("feeder", f"binance:{sym}", "monitor", "ERROR", "GAP_ENQUEUE_ERR", repr(e))
 
