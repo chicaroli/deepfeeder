@@ -9,6 +9,10 @@ import os
 import pyarrow as pa
 import pandas as pd
 
+from datetime import datetime, timezone
+from deephaven import filters as dff
+
+
 from runtime.heartbeat import Heartbeater
 from runtime.eventlog import emit_event
 from .listener import _SymListener
@@ -185,20 +189,21 @@ class MarketFeeder:
         return len(handles)
 
     def snapshot_range(
-            self,
-            provider: str,
-            data_schema: str,
-            symbol: str,
-            *,
-            start_ns: Optional[int] = None,
-            end_ns: Optional[int] = None,
-            fields: Optional[Iterable[str]] = None,
-            include_open_bar: bool = True,  # reserved for future use
+        self,
+        provider: str,
+        data_schema: str,
+        symbol: str,
+        *,
+        start_ns: Optional[int] = None,
+        end_ns: Optional[int] = None,
+        fields: Optional[Iterable[str]] = None,
+        include_open_bar: bool = True,  # reserved for future use
     ) -> pa.Table:
         """
         Return a non-ticking snapshot as a single Arrow table.
         - Bars: all rows in [start_ns, end_ns] (optionally include current open bar).
         - Trades/quotes: all rows in [start_ns, end_ns].
+        Uses Deephaven filter objects (no query-language helpers required).
         """
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per snapshot is allowed. 'symbol' must be a string.")
@@ -207,20 +212,21 @@ class MarketFeeder:
             raise ValueError(f"Unknown provider/schema: {provider}/{data_schema}")
 
         base = spec.table_fn()
-        sym_expr = _symbol_filter_expr(spec, symbol)
-        where_parts = [sym_expr]
-        if start_ns is not None:
-            where_parts.append(f"{spec.time_col} >= nanosToTime({int(start_ns)})")
-        if end_ns is not None:
-            where_parts.append(f"{spec.time_col} <= nanosToTime({int(end_ns)})")
-        expr = " && ".join(where_parts) if where_parts else "true"
 
-        t = base.where(expr).view(list(spec.cols)).sort([spec.time_col])
-        arr = t.to_arrow()
-        try:
-            t.release()
-        except Exception:
-            pass
+        # Build filter objects using new Filter.from_() API (AND semantics when passed as a list)
+        flts = [dff.Filter.from_(f"{spec.symbol_col} == `{symbol}`")]
+        if start_ns is not None:
+            start_dt = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=timezone.utc)
+            flts.append(dff.Filter.from_(f"{spec.time_col} >= {start_dt.isoformat()}"))
+        if end_ns is not None:
+            end_dt = datetime.fromtimestamp(end_ns / 1_000_000_000, tz=timezone.utc)
+            flts.append(dff.Filter.from_(f"{spec.time_col} <= {end_dt.isoformat()}"))
+
+        # Do the DH ops; the route already wrapped use_dh_ctx(), so no ctx here.
+        t = base.where(*flts).view(list(spec.cols)).sort([spec.time_col])
+        # Convert table to Arrow format using iter_dict and from_pylist
+        table_data = list(t.iter_dict())
+        arr = pa.Table.from_pylist(table_data) if table_data else pa.table({})
 
         # Column filtering (case-insensitive)
         if fields:
