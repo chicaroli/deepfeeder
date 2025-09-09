@@ -181,7 +181,12 @@ class DuckDbEventStore(EventStore):
         if self._prune_count % self.vacuum_every_n_prunes == 0:
             try:
                 self.con.execute("VACUUM")
-            except Exception:
+                emit_event("feeder", "CORE", "event_store", "INFO", "VACUUM",
+                           f"performed VACUUM after {self._prune_count} prunes")
+
+            except Exception as e:
+                emit_event("feeder", "CORE", "event_store", "ERROR", "VACUUM",
+                           f"VACUUM failed: {e!r}")
                 pass
 
     def _prune_upto_locked(self, cutoff_inclusive: int) -> int:
