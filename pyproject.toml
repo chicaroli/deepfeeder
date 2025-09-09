@@ -1,7 +1,7 @@
 [project]
 name = "deepfeeder"
-version = "0.1.0"
-description = "Add your description here"
+version = "1.0.0"
+description = "DeepFeeder is a real-time market data feeder framework built on Deephaven"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

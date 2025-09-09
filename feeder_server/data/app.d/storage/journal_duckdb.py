@@ -185,30 +185,6 @@ class DuckDbJournal(JournalStore):
 
         return len(ticks)
 
-    # def append_batch(self, ticks: List[Tick]) -> int:
-    #     if not ticks:
-    #         return 0
-    #     # Build rows and keys
-    #     rows = [(t.provider, t.stream, t.symbol, int(t.ts_ns),
-    #              -1 if t.seq is None else int(t.seq), bool(t.is_final), t.payload) for t in ticks]
-    #     keys = [(t.provider, t.stream, t.symbol, str(natural_key(t))) for t in ticks]
-    #     # Insert-ignore keys, then insert only new rows by left-joining on keys
-    #     with self._txn():
-    #         self.con.executemany("""
-    #             INSERT INTO key_index(provider, stream, symbol, nat_key)
-    #             VALUES (?, ?, ?, ?)
-    #             ON CONFLICT(provider, stream, symbol, nat_key) DO NOTHING
-    #         """, keys)
-    #         # Insert all rows; duplicates are harmless but wasteful. You can filter by checking inserted rowcount above if desired.
-    #         self.con.executemany("""
-    #             INSERT INTO journal_hot(provider, stream, symbol, ts_ns, seq, is_final, payload)
-    #             VALUES (?, ?, ?, ?, ?, ?, ?)
-    #             ON CONFLICT(provider, stream, symbol, ts_ns) DO NOTHING
-    #         """, rows)
-    #         # Upsert into canonical as well (latest state per nat_key)
-    #         self._merge_into_canonical_no_txn(ticks)
-    #     return len(rows)
-
     def append_envelope(self, env: Envelope) -> int:
         if not env.rows:
             return 0
@@ -252,21 +228,6 @@ class DuckDbJournal(JournalStore):
                 is_final=bool(isf),
             ))
         return out
-
-    # def _load_recent_old(self, since_ts_ns: int, columns: Optional[List[str]] = None) -> List[Tick]:
-    #     cols = "provider, stream, symbol, ts_ns, seq, is_final, payload"
-    #     with self._lock:
-    #         recs = self.con.execute(
-    #             f"SELECT {cols} FROM journal_hot WHERE ts_ns >= ? ORDER BY ts_ns",
-    #             [int(since_ts_ns)]
-    #         ).fetchall()
-    #     out: List[Tick] = []
-    #     for p,sym_stream,smb,ts,seq,isf,payload in recs:
-    #         out.append(Tick(provider=p, stream=sym_stream, symbol=smb,
-    #                         ts_ns=int(ts),
-    #                         seq=(None if int(seq) < 0 else int(seq)),
-    #                         payload=payload, is_final=bool(isf)))
-    #     return out
 
     def get_watermark(self, scope: str = "global") -> int:
         with self._lock:
@@ -385,83 +346,6 @@ class DuckDbJournal(JournalStore):
                 last_nat = str(nat_key)
 
             yield page
-
-    # def _stream_ticks_since_old(
-    #         self,
-    #         since_ts_ns: int,
-    #         *,
-    #         provider_filter: Optional[Set[str]] = None,
-    #         stream_filter: Optional[Set[str]] = None,
-    #         page_rows: int = 20_000,
-    # ) -> Iterator[List[Tick]]:
-    #     """
-    #     Stream Tick rows from journal_hot starting at since_ts_ns, ordered by (ts_ns, rowid),
-    #     yielding pages of up to 'page_rows' items. No batch_id is required.
-    #     """
-    #     last_ts = int(since_ts_ns)
-    #     last_rowid = -1
-    #
-    #     where_extra = []
-    #     params_extra: List[object] = []
-    #     if provider_filter:
-    #         where_extra.append(f"provider IN ({','.join('?' for _ in provider_filter)})")
-    #         params_extra.extend(list(provider_filter))
-    #     if stream_filter:
-    #         where_extra.append(f"stream IN ({','.join('?' for _ in stream_filter)})")
-    #         params_extra.extend(list(stream_filter))
-    #     where_extra_sql = (" AND " + " AND ".join(where_extra)) if where_extra else ""
-    #
-    #     while True:
-    #         # fetch the next page under the lock, then release while we normalize/yield
-    #         with self._lock:
-    #             rs = self.con.execute(
-    #                 f"""
-    #                 SELECT rowid, provider, stream, symbol, ts_ns, seq, is_final, payload
-    #                 FROM journal_hot
-    #                 WHERE ((ts_ns > ?) OR (ts_ns = ? AND rowid > ?)) {where_extra_sql}
-    #                 ORDER BY ts_ns ASC, rowid ASC
-    #                 LIMIT ?
-    #                 """,
-    #                 [last_ts, last_ts, last_rowid] + params_extra + [int(page_rows)],
-    #             ).fetchall()
-    #
-    #         if not rs:
-    #             break
-    #
-    #         page: List[Tick] = []
-    #         for rowid, prov, stream, sym, ts_ns, seq, is_final, payload in rs:
-    #             # --- normalize payload to dict ---------------------------------
-    #             if payload is None:
-    #                 payload_norm = {}
-    #             elif isinstance(payload, (bytes, bytearray)):
-    #                 try:
-    #                     payload_norm = json.loads(payload.decode("utf-8"))
-    #                 except Exception:
-    #                     payload_norm = {"raw": payload.decode("utf-8", "replace")}
-    #             elif isinstance(payload, str):
-    #                 try:
-    #                     payload_norm = json.loads(payload)
-    #                 except Exception:
-    #                     payload_norm = {"raw": payload}
-    #             else:
-    #                 # duckdb might already return a dict-like for JSON; accept it
-    #                 payload_norm = payload
-    #
-    #             page.append(
-    #                 Tick(
-    #                     provider=str(prov),
-    #                     stream=str(stream),
-    #                     symbol=str(sym),
-    #                     ts_ns=int(ts_ns),
-    #                     seq=(None if seq is None or int(seq) < 0 else int(seq)),
-    #                     payload=payload_norm,  # ← dict
-    #                     is_final=bool(is_final),
-    #                 )
-    #             )
-    #             last_ts = int(ts_ns)
-    #             last_rowid = int(rowid)
-    #
-    #         yield page
 
     def next_committed_from(self, start_batch_inclusive: int, limit: int) -> list[Envelope]:
         start = int(start_batch_inclusive)
