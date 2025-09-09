@@ -3,15 +3,18 @@
 core.py
 MarketFeeder orchestration for subscriptions, snapshots, and replay.
 """
-import pandas as pd
-from typing import Dict, Set, Callable, Optional, Iterable, Tuple
+from typing import Dict, Set, Callable, Optional, Iterable, Tuple, Iterator
 import time
 import os
+import pyarrow as pa
+import pandas as pd
+
 from runtime.heartbeat import Heartbeater
 from runtime.eventlog import emit_event
 from .listener import _SymListener
 from .schemas import SCHEMAS
-from .utils import _symbol_filter_expr, _filter_fields, _rename_snapshot_cols, _today_expr
+from .utils import _symbol_filter_expr, _filter_fields
+
 
 class MarketFeeder:
     """Orchestrates listeners, subscriptions, snapshots, and replay for market data."""
@@ -181,64 +184,178 @@ class MarketFeeder:
             pass
         return len(handles)
 
-    def get_today_snapshot(self, provider: str, data_schema: str, symbol: str,
-                           fields: Optional[Iterable[str]] = None) -> pd.DataFrame:
+    def snapshot_range(
+            self,
+            provider: str,
+            data_schema: str,
+            symbol: str,
+            *,
+            start_ns: Optional[int] = None,
+            end_ns: Optional[int] = None,
+            fields: Optional[Iterable[str]] = None,
+            include_open_bar: bool = True,  # reserved for future use
+    ) -> pa.Table:
+        """
+        Return a non-ticking snapshot as a single Arrow table.
+        - Bars: all rows in [start_ns, end_ns] (optionally include current open bar).
+        - Trades/quotes: all rows in [start_ns, end_ns].
+        """
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per snapshot is allowed. 'symbol' must be a string.")
         spec = SCHEMAS.get((provider, data_schema))
         if spec is None:
             raise ValueError(f"Unknown provider/schema: {provider}/{data_schema}")
+
         base = spec.table_fn()
         sym_expr = _symbol_filter_expr(spec, symbol)
-        cols = tuple(spec.cols) if not fields else tuple(
-            c for c in spec.cols if (c.lower() in {f.lower() for f in fields} or c in (spec.time_col, spec.symbol_col))
-        )
-        t = (base.where(_today_expr(spec, sym_expr))
-                 .view(list(cols))
-                 .sort([spec.time_col]))
-        df = t.to_pandas()
+        where_parts = [sym_expr]
+        if start_ns is not None:
+            where_parts.append(f"{spec.time_col} >= nanosToTime({int(start_ns)})")
+        if end_ns is not None:
+            where_parts.append(f"{spec.time_col} <= nanosToTime({int(end_ns)})")
+        expr = " && ".join(where_parts) if where_parts else "true"
+
+        t = base.where(expr).view(list(spec.cols)).sort([spec.time_col])
+        arr = t.to_arrow()
         try:
             t.release()
         except Exception:
             pass
-        rename = {
-            spec.time_col: "timestamp",
-            spec.symbol_col: "symbol",
-            "Open": "o", "High": "h", "Low": "l", "Close": "c", "Volume": "v"
-        }
-        return _rename_snapshot_cols(df, {c: rename.get(c, c) for c in cols})
 
-    def replay_since(self, provider: str, data_schema: str, symbol: str,
-                     watermark_iso: Optional[str],
-                     send: Callable[[dict], None],
-                     fields: Optional[Iterable[str]] = None):
+        # Column filtering (case-insensitive)
+        if fields:
+            want = {f.lower() for f in fields}
+            keep = [n for n in arr.schema.names if n.lower() in want]
+            arr = arr.select(keep) if keep else pa.table({})
+        return arr
+
+    def snapshot_rows(
+            self,
+            provider: str,
+            data_schema: str,
+            symbol: str,
+            *,
+            start_ns: Optional[int] = None,
+            end_ns: Optional[int] = None,
+            fields: Optional[Iterable[str]] = None,
+    ) -> Iterator[dict]:
+        """Convenience: iterate dict rows from snapshot_range()."""
+        arr = self.snapshot_range(provider, data_schema, symbol, start_ns=start_ns, end_ns=end_ns, fields=fields)
+        yield from arr.to_pylist()
+
+    def replay_since_ns(
+            self,
+            provider: str,
+            data_schema: str,
+            symbol: str,
+            since_ns: Optional[int],
+            emit: Callable[[str, dict], None],
+            fields: Optional[Iterable[str]] = None,
+    ) -> int:
+        """
+        Row-wise replay from the listener ring buffer for batches newer than since_ns (epoch ns).
+        Calls: emit(part, row_dict) for each row, where part ∈ {'added','updated','completed'}.
+        Returns total rows emitted.
+        """
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per replay is allowed. 'symbol' must be a string.")
         key = self._key(provider, data_schema, symbol)
         lsn = self._lsn.get(key)
         if not lsn:
-            return
-        wm_ts = pd.to_datetime(watermark_iso, utc=True) if watermark_iso else None
-        for msg in list(lsn.buf):
-            ts_iso = msg.get("meta", {}).get("timestamp")
-            if not ts_iso:
-                continue
-            ts = pd.to_datetime(ts_iso, utc=True)
-            if wm_ts is None or ts > wm_ts:
-                send(_filter_fields(msg, fields))
+            return 0
+        cols_req = {f.lower() for f in fields} if fields else None
 
-    def attach_client_gapless(self, provider: str, data_schema: str, symbol: str,
-                              callback: Callable[[dict], None],
-                              fields: Optional[Iterable[str]] = None
-                              ) -> Tuple[str, pd.DataFrame, Optional[str]]:
+        def _iter_rows(tbl: Optional[pa.Table]) -> Iterator[dict]:
+            if tbl is None:
+                return iter(())
+            sel = tbl
+            if cols_req:
+                try:
+                    names = list(tbl.schema.names)
+                    keep = [n for n in names if n.lower() in cols_req]
+                    sel = tbl.select(keep) if keep else None
+                except Exception:
+                    sel = tbl
+            return iter(()) if sel is None else iter(sel.to_pylist())
+
+        total = 0
+        # Work on a static copy of the ring to avoid concurrent mutation surprises
+        for msg in list(lsn.buf):
+            meta = msg.get("meta") or {}
+            ts_ns = meta.get("ts_ns")
+            if ts_ns is None:
+                ts_iso = meta.get("timestamp")
+                if not ts_iso:
+                    continue
+                ts_ns = int(pd.Timestamp(ts_iso, tz="UTC").value)
+            if since_ns is None or ts_ns > since_ns:
+                for part in ("added", "updated", "completed"):
+                    for row in _iter_rows(msg.get(part)):
+                        emit(part, row)
+                        total += 1
+        return total
+
+    def attach_gapless(
+            self,
+            provider: str,
+            data_schema: str,
+            symbol: str,
+            *,
+            emit_snapshot_row: Callable[[dict], None],
+            emit_replay_row: Callable[[str, dict], None],
+            fields: Optional[Iterable[str]] = None,
+            only_completed: bool = True,
+            start_ns: Optional[int] = None,
+    ) -> Tuple[str, Optional[int]]:
+        """
+        Gapless attach helper:
+          1) Ensure/subscribe to live (returns handle).
+          2) Emit a 'snapshot' (rows) using snapshot_range() from start_ns (defaults to UTC day start).
+          3) Compute watermark_ns as last row time from snapshot (bars: last *completed* bar).
+          4) Emit a short replay from ring buffer newer than watermark.
+        Returns (handle, watermark_ns).
+        """
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per gapless attach is allowed. 'symbol' must be a string.")
-        handle = self.subscribe(provider, data_schema, symbol, callback, fields=fields)
-        snap = self.get_today_snapshot(provider, data_schema, symbol, fields=fields)
-        wm = None
-        if len(snap) >= 2 and "timestamp" in snap.columns:
-            wm = snap.iloc[-2]["timestamp"]
-        return handle, snap, wm
+        spec = SCHEMAS.get((provider, data_schema))
+        if spec is None:
+            raise ValueError(f"Unknown provider/schema: {provider}/{data_schema}")
+
+        # 1) live subscription (proven path)
+        handle = self.subscribe(provider, data_schema, symbol, callback=lambda _: None,
+                                fields=fields, only_completed=only_completed)
+
+        # 2) snapshot (default to UTC day start)
+        if start_ns is None:
+            day_start = pd.Timestamp.utcnow().normalize().tz_localize("UTC")
+            start_ns = int(day_start.value)
+        snap_tbl = self.snapshot_range(provider, data_schema, symbol, start_ns=start_ns, fields=fields)
+        snap_py = snap_tbl.to_pylist()
+        for row in snap_py:
+            emit_snapshot_row(row)
+
+        # 3) watermark_ns
+        wm_ns: Optional[int] = None
+        if snap_py:
+            # Bars: last completed bar is previous row; trades: last row
+            if spec.bin_period_minutes and len(snap_py) >= 2:
+                last_completed = snap_py[-2]
+                ts_val = last_completed.get(spec.time_col) or last_completed.get("Timestamp") or last_completed.get(
+                    "Ts")
+            else:
+                ts_val = snap_py[-1].get(spec.time_col) or snap_py[-1].get("Timestamp") or snap_py[-1].get("Ts")
+            try:
+                wm_ns = int(pd.Timestamp(ts_val, tz="UTC").value)
+            except Exception:
+                wm_ns = None
+
+        # 4) short replay from ring buffer (row-wise)
+        try:
+            self.replay_since_ns(provider, data_schema, symbol, wm_ns, emit=emit_replay_row, fields=fields)
+        except Exception:
+            pass
+
+        return handle, wm_ns
 
     def stats(self) -> dict:
         """Return a snapshot of internal state for diagnostics / monitoring.
@@ -287,6 +404,8 @@ class MarketFeeder:
             except Exception:
                 pass
             self._last_core_meta_ts = now
+
+
 
 # Expose singleton for App Mode
 market_feeder = MarketFeeder()

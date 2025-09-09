@@ -3,16 +3,18 @@
 listener.py
 Listener class for MarketFeeder.
 """
-from collections import deque
-import pyarrow as pa
-from deephaven.table_listener import listen, TableListener, TableUpdate
-from typing import Optional
-from datetime import datetime, timezone
-from .schemas import SchemaSpec
 import os
 import time
+from typing import Optional
+from datetime import datetime, timezone
+from collections import deque
+import pyarrow as pa
+from pandas import Timestamp as _PdTs
+from deephaven.table_listener import listen, TableListener, TableUpdate
 from runtime.heartbeat import Heartbeater
 from ingest.manager_tables import get_status_writer
+from .schemas import SchemaSpec
+
 
 class _SymListener(TableListener):
     """Listener for a single (provider, schema, symbol) table view.
@@ -31,12 +33,10 @@ class _SymListener(TableListener):
         self.emit_completed = emit_completed
         self.curr: Optional[dict] = None
         if buf_maxlen is None:
-            try:
-                buf_maxlen = int(os.getenv("DEEPFEEDER_FANOUT_LISTENER_BUFFER_LEN", "256"))
-            except Exception:
-                buf_maxlen = 256
+            buf_maxlen = int(os.getenv("DEEPFEEDER_FANOUT_LISTENER_BUFFER_LEN", "256"))
         self.buf: deque[dict] = deque(maxlen=buf_maxlen)
         self.debug = debug
+
         # Heartbeat (throttled meta beats)
         self._hb = Heartbeater("fanout", f"{provider}:{data_schema}:{symbol}", "listener")
         self._hb.beat("starting", meta={"buffer_len": 0, "last_added": 0, "last_updated": 0, "last_completed": 0})
@@ -44,11 +44,9 @@ class _SymListener(TableListener):
         self._meta_min_interval = float(os.getenv("DEEPFEEDER_FANOUT_LISTENER_HEARTBEAT_MIN_INTERVAL", "2"))
         self._dbg(f"init bin_period={spec.bin_period_minutes} time_col={spec.time_col}")
         self.handle = listen(view, self)
+
         # Service status (shared with feeders)
-        try:
-            self._status_writer = get_status_writer()
-        except Exception:
-            self._status_writer = None
+        self._status_writer = get_status_writer()
         self.started_at = time.time()
         self.msg_count = 0
         self.last_error: Optional[str] = None
@@ -109,6 +107,7 @@ class _SymListener(TableListener):
         added_tbl = None
         updated_tbl = None
         completed_tbl = None
+
         # 1. Handle additions first (so we capture completion before modifying new bar state)
         if update.added():
             raw_added = update.added()
@@ -156,6 +155,7 @@ class _SymListener(TableListener):
                         added_tbl = None
                 else:  # non-bar schema: adds are complete events
                     completed_tbl = added_tbl
+
         # 2. Handle modifications after adds so current bar gets latest values
         if update.modified():
             mod_raw = update.modified()
@@ -177,6 +177,9 @@ class _SymListener(TableListener):
                         self._dbg(f"ignored modification ts={ts} < curr_ts={self.curr[self.spec.time_col]}")
                 else:
                     self._dbg(f"modified rows={updated_tbl.num_rows}")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        now_ns = int(_PdTs.utcnow().value)  # epoch ns
         batch = {
             'added': added_tbl,
             'updated': updated_tbl,
@@ -185,7 +188,8 @@ class _SymListener(TableListener):
                 'provider': self.provider,
                 'schema': self.data_schema,
                 'symbol': self.symbol,
-                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'timestamp': now_iso,
+                'ts_ns': now_ns,
             }
         }
         self._dbg("emit batch " +

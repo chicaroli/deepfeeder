@@ -1,6 +1,6 @@
 [project]
 name = "deepfeeder"
-version = "1.0.0"
+version = "1.1.0"
 description = "DeepFeeder is a real-time market data feeder framework built on Deephaven"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -11,6 +11,8 @@ dependencies = [
     "requests>=2.32.5",
     "tradingview-datafeed>=2.1.1",
     "websocket-client>=1.8.0",
+    "fastapi>=0.116.1",
+    "uvicorn>=0.35.0",
 ]
 
 [tool.uv]

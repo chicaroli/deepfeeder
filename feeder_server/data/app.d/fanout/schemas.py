@@ -20,7 +20,7 @@ from providers.binance import (
 import providers.binance.schema as binance_sch
 from providers.tradingview import (
     tv_quotes_table,
-    tv_bars_filled,
+    tv_ohlcv_1m,
 )
 import providers.tradingview.schema as tv_sch
 
@@ -35,7 +35,15 @@ class SchemaSpec:
     bin_period_minutes: Optional[int]
 
 SCHEMAS: Dict[Tuple[str, str], SchemaSpec] = {
-    # Binance OHLCV (filled variants only)
+
+    # Binance
+    ("binance", "trades"): SchemaSpec(
+        table_fn=binance_trades_table,
+        time_col=binance_sch.BINANCE_TRADES_TIME_COL,
+        symbol_col=binance_sch.BINANCE_TRADES_SYMBOL_COL,
+        cols=binance_sch.BINANCE_TRADES_SCHEMA_COLS,
+        bin_period_minutes=None,
+    ),
     ("binance", "ohlcv_1m"): SchemaSpec(
         table_fn=binance_ohlcv_1m_filled,
         time_col=binance_sch.BINANCE_OHLCV_TIME_COL,
@@ -50,14 +58,8 @@ SCHEMAS: Dict[Tuple[str, str], SchemaSpec] = {
         cols=binance_sch.BINANCE_OHLCV_FILLED_SCHEMA_COLS,
         bin_period_minutes=5,
     ),
-    ("binance", "trades"): SchemaSpec(
-        table_fn=binance_trades_table,
-        time_col=binance_sch.BINANCE_TRADES_TIME_COL,
-        symbol_col=binance_sch.BINANCE_TRADES_SYMBOL_COL,
-        cols=binance_sch.BINANCE_TRADES_SCHEMA_COLS,
-        bin_period_minutes=None,
-    ),
-    # TradingView OHLCV (filled variants only)
+
+    # TradingView OHLCV
     ("tradingview", "quotes"): SchemaSpec(
         table_fn=tv_quotes_table,
         time_col=tv_sch.TV_QUOTES_TIME_COL,
@@ -66,7 +68,7 @@ SCHEMAS: Dict[Tuple[str, str], SchemaSpec] = {
         bin_period_minutes=None,
     ),
     ("tradingview", "ohlcv_1m"): SchemaSpec(
-        table_fn=tv_bars_filled,
+        table_fn=tv_ohlcv_1m,
         time_col=tv_sch.TV_BARS_TIME_COL,
         symbol_col=tv_sch.TV_BARS_SYMBOL_COL,
         cols=tv_sch.TV_BARS_FILLED_SCHEMA_COLS,

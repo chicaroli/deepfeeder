@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 
 
-# --- logging helpers -------------------------------------------------------
+# --- logging helpers -------------------------------------------------------------------
 def _log(msg: str, *, name: str = "APP", level: str = "INFO", code: str = "APP_START") -> None:
     """Print a console line and mirror it into the unified event log.
 
@@ -30,7 +30,8 @@ def _log(msg: str, *, name: str = "APP", level: str = "INFO", code: str = "APP_S
     except Exception:
         pass
 
-# --- startup environment summary -------------------------------------------
+
+# --- startup environment summary -------------------------------------------------------
 autostart_env = os.getenv("DEEPFEEDER_AUTOSTART", "1")
 register_ui_env = os.getenv("DEEPFEEDER_REGISTER_UI", "1")
 
@@ -40,6 +41,8 @@ _log(f"env DEEPFEEDER_AUTOSTART={autostart_env!r} DEEPFEEDER_REGISTER_UI={regist
 
 import deepfeeder as dfb
 import ui.dashboard
+from config.paths import PATHS
+from storage.vacuum_databases import run_vacuum
 from runtime.eventlog import emit_event
 from runtime.warmup import hydrate_dh_from_journal
 from ingest.feed_manager import FeedManager
@@ -73,6 +76,16 @@ try:
     except Exception as e:
         fm = None
         _log(f"FeedManager service registration failed: {e!r}", name="UI_REGISTER", level="ERROR")
+
+
+    # Optional offline VACUUM: run on the persisted .duckdb files BEFORE warmup ---------
+    if os.getenv("DEEPFEEDER_VACUUM_ON_STARTUP", "0") not in ("0", "false", "False"):
+        try:
+            _log("Startup: attempting offline VACUUM of DuckDB files", name="VACUUM")
+            run_vacuum(str(PATHS.hot_root))
+            _log("offline VACUUM of DuckDB files completed", name="VACUUM")
+        except Exception as exc:
+            _log(f"offline VACUUM of DuckDB files failed: {exc!r}", name="VACUUM", level="ERROR")
 
 
     # Warm replay into DH from Journal (if enabled and possible) ------------------------
@@ -149,11 +162,18 @@ try:
     else:
         _log("AUTOSTART disabled by environment", name="AUTOSTART")
 
+    # Start FastAPI fanout core runners ---------------------------------------------
+    from fanout.core import market_feeder
+    from fanout.start import start_fanout
+    try:
+        start_fanout()
+        _log("Fanout core runners started", name="CORE")
+    except Exception as exc:
+        _log(f"Fanout core runners failed to start: {exc!r}", name="CORE", level="ERROR")
+
+
+
 except Exception as exc:
     _log(f"failed to start core runners: {exc!r}", name="CORE", level="ERROR")
-
-
-
-
 
 

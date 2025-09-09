@@ -9,6 +9,7 @@ services:
     ports:
       - "10001:10001"   # gRPC
       - "10000:10000"   # UI
+      - "8083:8083"     # <-- fanout FastAPI
     environment:
       PYTHONPATH: /data/app.d
       START_OPTS: >-
@@ -22,6 +23,7 @@ services:
       DEEPFEEDER_REPLAY_ON_START: "${DEEPFEEDER_REPLAY_ON_START:-1}"
       DEEPFEEDER_REPLAY_WINDOW_SECS: "${DEEPFEEDER_REPLAY_WINDOW_SECS:-21600}"
       DF_DEBUG_IO: "${DF_DEBUG_IO:-1}"
+      FANOUT_PORT: "8083"
     volumes:
       - ./feeder_server/data:/data
     restart: unless-stopped

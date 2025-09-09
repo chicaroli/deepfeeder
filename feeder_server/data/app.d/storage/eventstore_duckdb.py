@@ -179,15 +179,7 @@ class DuckDbEventStore(EventStore):
         self._prune_count += 1
         # Periodic full compaction (CHECKPOINT runs inside _prune_upto_locked)
         if self._prune_count % self.vacuum_every_n_prunes == 0:
-            try:
-                self.con.execute("VACUUM")
-                emit_event("feeder", "CORE", "event_store", "INFO", "VACUUM",
-                           f"performed VACUUM after {self._prune_count} prunes")
-
-            except Exception as e:
-                emit_event("feeder", "CORE", "event_store", "ERROR", "VACUUM",
-                           f"VACUUM failed: {e!r}")
-                pass
+            self.force_vacuum(self._prune_count)
 
     def _prune_upto_locked(self, cutoff_inclusive: int) -> int:
        """Internal: perform the DELETE + CHECKPOINT under the caller's lock."""
@@ -203,14 +195,38 @@ class DuckDbEventStore(EventStore):
        try:
            self.con.execute("DELETE FROM event_store WHERE batch_id <= ?", [int(cutoff_inclusive)])
            self.con.execute("COMMIT")
-       except Exception:
+           emit_event("feeder", "CORE", "event_store", "INFO", "PRUNE",
+                      f"pruned {n} envelopes up to batch_id {cutoff_inclusive}")
+       except Exception as e:
            self.con.execute("ROLLBACK")
+           emit_event("feeder", "CORE", "event_store", "WARNING", "CHECKPOINT",
+                      f"CHECKPOINT failed after pruning {n} envelopes: {e!r}")
            raise
        # Merge free pages; lighter than VACUUM and safe to do every prune
        try:
            self.con.execute("CHECKPOINT")
-           emit_event("feeder", "CORE", "event_store", "INFO", "PRUNE",
-                      f"pruned {n} envelopes up to batch_id {cutoff_inclusive}")
-       except Exception:
-           pass
+       except Exception as e:
+           emit_event("feeder", "CORE", "event_store", "WARNING", "CHECKPOINT",
+                      f"CHECKPOINT failed after pruning {n} envelopes: {e!r}")
        return n
+
+    def force_vacuum(self, prune_count: int | None) -> None:
+        """Perform an immediate VACUUM on the DuckDB database.
+
+        Useful when you need to reclaim file space immediately after pruning.
+        This runs under the store's lock to serialize with other DB activity
+        and emits an event on success/failure.
+        """
+        with self._lock:
+            try:
+                # Ensure any pending writes are checkpointed before full compaction
+                try:
+                    self.con.execute("CHECKPOINT")
+                except Exception:
+                    pass
+                self.con.execute("VACUUM")
+                emit_event("feeder", "CORE", "event_store", "INFO", "VACUUM",
+                           f"performed VACUUM after {prune_count} prunes")
+            except Exception as e:
+                emit_event("feeder", "CORE", "event_store", "ERROR", "VACUUM",
+                           f"VACUUM failed: {e!r}")
