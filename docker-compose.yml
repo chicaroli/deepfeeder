@@ -13,15 +13,15 @@ services:
     environment:
       PYTHONPATH: /data/app.d
       START_OPTS: >-
-        -Xms2g 
-        -Xmx4g 
+        -Xms4g 
+        -Xmx8g 
         -DAuthHandlers=io.deephaven.auth.AnonymousAuthenticationHandler 
         -Ddeephaven.application.dir=/data/app.d 
         -Ddeephaven.application.enabled=true
       DEEPFEEDER_REGISTER_UI: "${DEEPFEEDER_REGISTER_UI:-1}"
       DEEPFEEDER_AUTOSTART: "${DEEPFEEDER_AUTOSTART:-0}"
-      DEEPFEEDER_REPLAY_ON_START: "${DEEPFEEDER_REPLAY_ON_START:-1}"
-      DEEPFEEDER_REPLAY_WINDOW_SECS: "${DEEPFEEDER_REPLAY_WINDOW_SECS:-21600}"
+      DEEPFEEDER_REPLAY_ON_START: "${DEEPFEEDER_REPLAY_ON_START:-0}"
+      DEEPFEEDER_REPLAY_WINDOW_SECS: "${DEEPFEEDER_REPLAY_WINDOW_SECS:-2700}"
       DF_DEBUG_IO: "${DF_DEBUG_IO:-1}"
       FANOUT_PORT: "8083"
     volumes:
@@ -45,4 +45,4 @@ services:
 
 networks:
   eagle_nest:
-    external: false
+    external: true

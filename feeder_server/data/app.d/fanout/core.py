@@ -11,7 +11,7 @@ import pandas as pd
 
 from datetime import datetime, timezone
 from deephaven import filters as dff
-
+from deephaven.arrow import to_arrow
 
 from runtime.heartbeat import Heartbeater
 from runtime.eventlog import emit_event
@@ -194,6 +194,7 @@ class MarketFeeder:
         data_schema: str,
         symbol: str,
         *,
+        exchange: Optional[str] = None,
         start_ns: Optional[int] = None,
         end_ns: Optional[int] = None,
         fields: Optional[Iterable[str]] = None,
@@ -204,6 +205,16 @@ class MarketFeeder:
         - Bars: all rows in [start_ns, end_ns] (optionally include current open bar).
         - Trades/quotes: all rows in [start_ns, end_ns].
         Uses Deephaven filter objects (no query-language helpers required).
+
+        Parameters:
+          :param provider: Data provider name (e.g. 'binance', 'tradingview').
+          :param data_schema: Schema key (e.g. 'trades', 'ohlcv_1m').
+          :param symbol: Instrument symbol (case-sensitive per provider rules).
+          :param exchange: Optional exchange code. Applied only if the underlying schema exposes an 'Exchange' column.
+          :param start_ns: Inclusive nanosecond epoch bounds. If omitted, unbounded on that side.
+          :param end_ns: Inclusive nanosecond epoch bounds. If omitted, unbounded on that side.
+          :param fields: Optional iterable of column names (case-insensitive) to project.
+          :param include_open_bar: Reserved (no-op currently).
         """
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per snapshot is allowed. 'symbol' must be a string.")
@@ -213,8 +224,10 @@ class MarketFeeder:
 
         base = spec.table_fn()
 
-        # Build filter objects using new Filter.from_() API (AND semantics when passed as a list)
+        # Build filter objects
         flts = [dff.Filter.from_(f"{spec.symbol_col} == `{symbol}`")]
+        if exchange and "Exchange" in spec.cols:
+            flts.append(dff.Filter.from_(f"Exchange == `{exchange.upper()}`"))
         if start_ns is not None:
             start_dt = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=timezone.utc)
             flts.append(dff.Filter.from_(f"{spec.time_col} >= {start_dt.isoformat()}"))
@@ -222,11 +235,9 @@ class MarketFeeder:
             end_dt = datetime.fromtimestamp(end_ns / 1_000_000_000, tz=timezone.utc)
             flts.append(dff.Filter.from_(f"{spec.time_col} <= {end_dt.isoformat()}"))
 
-        # Do the DH ops; the route already wrapped use_dh_ctx(), so no ctx here.
+        # Query DH object
         t = base.where(*flts).view(list(spec.cols)).sort([spec.time_col])
-        # Convert table to Arrow format using iter_dict and from_pylist
-        table_data = list(t.iter_dict())
-        arr = pa.Table.from_pylist(table_data) if table_data else pa.table({})
+        arr = to_arrow(t)
 
         # Column filtering (case-insensitive)
         if fields:

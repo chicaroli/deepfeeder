@@ -89,8 +89,8 @@ try:
 
 
     # Warm replay into DH from Journal (if enabled and possible) ------------------------
-    WINDOW_DAYS = 2
-    since = time.time_ns() - WINDOW_DAYS * 24 * 60 * 60 * 1_000_000_000
+    WINDOW_SECS = os.getenv("DEEPFEEDER_REPLAY_WINDOW_SECS", "21600")  # default: 6 hours
+    since = time.time_ns() - int(WINDOW_SECS) * 1_000_000_000
     rows, last_ts = hydrate_dh_from_journal(
         journal=journal,
         dh_sink=dh_sink,
@@ -163,7 +163,6 @@ try:
         _log("AUTOSTART disabled by environment", name="AUTOSTART")
 
     # Start FastAPI fanout core runners ---------------------------------------------
-    from fanout.core import market_feeder
     from fanout.start import start_fanout
     try:
         start_fanout()

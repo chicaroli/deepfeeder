@@ -241,6 +241,7 @@ class DuckDbJournal(JournalStore):
                 ON CONFLICT(scope) DO UPDATE SET last_offset=excluded.last_offset
             """, [scope, int(value)])
 
+
     def stream_ticks_since(                         # type: ignore[override]
             self,
             since_ts_ns: int,
@@ -339,11 +340,16 @@ class DuckDbJournal(JournalStore):
                     seq=(None if seq is None or int(seq) < 0 else int(seq)),
                     payload=payload_norm, is_final=bool(is_final),
                 ))
-                # advance cursor on the chosen key
-                last_t = int(ts_ns) if not by_updated else max(last_t, int(self.con.execute(
-                    "SELECT updated_at_ns FROM journal_canonical WHERE provider=? AND stream=? AND symbol=? AND nat_key=?",
-                    [prov, stream, sym, nat_key]).fetchone()[0]))
-                last_nat = str(nat_key)
+                # # advance cursor on the chosen key
+                # last_t = int(ts_ns) if not by_updated else max(last_t, int(self.con.execute(
+                #     "SELECT updated_at_ns FROM journal_canonical WHERE provider=? AND stream=? AND symbol=? AND nat_key=?",
+                #     [prov, stream, sym, nat_key]).fetchone()[0]))
+                # last_nat = str(nat_key)
+
+            # advance cursor using last row from this page (no extra SELECT)
+            last_key_time, last_nat_key = rs[-1][-2], rs[-1][3]
+            last_t = int(last_key_time)
+            last_nat = str(last_nat_key)
 
             yield page
 

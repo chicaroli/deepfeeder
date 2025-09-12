@@ -1,9 +1,9 @@
 from __future__ import annotations
 import asyncio
 import json
-from typing import Optional, Iterable
+from typing import Optional, Iterable, List, Tuple
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 
 from fanout.core import market_feeder, SCHEMAS
 from fanout.dh_ctx import use_dh_ctx
@@ -15,11 +15,29 @@ router = APIRouter()
 # HTTP: range snapshot (NDJSON)
 # ------------------------------
 
+@router.get("/schemas/list_schemas")
+def list_schemas(provider: Optional[str] = Query(default=None)) -> JSONResponse:
+    """
+    List all (provider, schema) tuples available in the schema registry.
+    Optionally filter by provider.
+
+    Args:
+        provider (Optional[str]): Provider name to filter results.
+
+    Returns:
+        JSONResponse: List of (provider, schema) tuples.
+    """
+    keys: List[Tuple[str, str]] = list(SCHEMAS.keys())
+    if provider is not None:
+        keys = [k for k in keys if k[0] == provider]
+    return JSONResponse(keys)
+
 @router.get("/range/{provider}/{schema}/{symbol}")
 def range_snapshot(
     provider: str,
     schema: str,
     symbol: str,
+    exchange: Optional[str] = Query(None, description="exchange code for multi-exchange schemas"),
     from_ns: Optional[int] = Query(None),
     to_ns: Optional[int] = Query(None),
     fields: Optional[str] = Query(None, description="comma-separated column list to project"),
@@ -28,11 +46,21 @@ def range_snapshot(
     fields_list: Optional[Iterable[str]] = [f.strip() for f in fields.split(",")] if fields else None
     is_bars = _is_bar_schema(provider, schema)
 
+    # Get schema spec and columns
+    spec = SCHEMAS.get((provider, schema))
+    if spec is None:
+        raise HTTPException(status_code=400, detail=f"Unknown provider/schema: {provider}/{schema}")
+    cols = spec.cols
+
+    # Only pass exchange if it's in the schema columns
+    exchange_arg = exchange if exchange and "Exchange" in cols else None
+
     try:
         # Enter Deephaven ExecutionContext on this request thread
         with use_dh_ctx():
             arr = market_feeder.snapshot_range(
                 provider, schema, symbol,
+                exchange=exchange_arg,
                 start_ns=from_ns, end_ns=to_ns, fields=fields_list
             )
     except Exception as e:

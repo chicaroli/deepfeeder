@@ -12,6 +12,7 @@ completions without needing to choose between sparse vs filled.
 from dataclasses import dataclass
 from typing import Callable, Any, Tuple, Optional, Dict
 
+from providers import tv_ohlcv_5m
 from providers.binance import (
     binance_trades_table,
     binance_ohlcv_1m_filled,
@@ -71,7 +72,14 @@ SCHEMAS: Dict[Tuple[str, str], SchemaSpec] = {
         table_fn=tv_ohlcv_1m,
         time_col=tv_sch.TV_BARS_TIME_COL,
         symbol_col=tv_sch.TV_BARS_SYMBOL_COL,
-        cols=tv_sch.TV_BARS_FILLED_SCHEMA_COLS,
+        cols=tv_sch.TV_BARS_SCHEMA_COLS,
         bin_period_minutes=1,
+    ),
+    ("tradingview", "ohlcv_5m"): SchemaSpec(
+        table_fn=tv_ohlcv_5m,
+        time_col=tv_sch.TV_BARS_TIME_COL,
+        symbol_col=tv_sch.TV_BARS_SYMBOL_COL,
+        cols=tv_sch.TV_BARS_SCHEMA_COLS,
+        bin_period_minutes=5,
     ),
 }
