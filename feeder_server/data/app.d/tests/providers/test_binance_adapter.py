@@ -28,12 +28,12 @@ def test_flatten_trades_rowdict(binance_msg):
 
     rowdict = flatten_trades(ticks)
     # columns present
-    for k in ["Provider", "Stream", "Symbol", "TsNanos", "TradeId", "Price", "Qty", "Side"]:
+    for k in ["Provider", "Stream", "Symbol", "TsNanos", "TradeID", "Price", "Qty", "Side"]:
         assert k in rowdict
         assert len(rowdict[k]) == 2
 
     # sample values
     assert rowdict["Provider"] == ["binance", "binance"]
     assert rowdict["Stream"]   == ["trades", "trades"]
-    assert rowdict["TradeId"]  == [msg1["t"], msg2["t"]]
+    assert rowdict["TradeID"]  == [msg1["t"], msg2["t"]]
     assert rowdict["Side"]     == ["sell", "buy"]  # m=True -> sell, m=False -> buy

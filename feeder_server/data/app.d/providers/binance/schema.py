@@ -13,7 +13,7 @@ BINANCE_OHLCV_FILLED_SCHEMA_COLS = BINANCE_OHLCV_SCHEMA_COLS + ("IsEmpty",)
 
 BINANCE_TRADES_TIME_COL = "Timestamp"
 BINANCE_TRADES_SYMBOL_COL = "Symbol"
-BINANCE_TRADES_SCHEMA_COLS = ("Timestamp", "Symbol", "TradeId", "Price", "Quantity", "BuyerID", "SellerID", "IsBuyerMaker")
+BINANCE_TRADES_SCHEMA_COLS = ("Timestamp", "Symbol", "TradeID", "Price", "Quantity", "BuyerID", "SellerID", "IsBuyerMaker")
 
 __all__ = [
     'binance_trades_writer', 'binance_trades_table',

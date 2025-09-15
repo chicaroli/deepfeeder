@@ -70,9 +70,9 @@ def range_snapshot(
         # Emit each row as a 'snapshot' with closed=True
         for row in arr.to_pylist():
             msg = (
-                adapt_bar_row(row, provider=provider, schema=schema, part="snapshot")
+                adapt_bar_row(row, provider=provider, schema=schema, part="snapshot", fields_list=fields_list)
                 if is_bars else
-                adapt_trade_row(row, provider=provider, schema=schema, part="snapshot")
+                adapt_trade_row(row, provider=provider, schema=schema, part="snapshot", fields_list=fields_list)
             )
             yield (json.dumps(msg) + "\n").encode("utf-8")
 
@@ -98,13 +98,13 @@ async def ws_stream(
 
     # Async helpers to send rows to this socket
     async def emit_snapshot_row(row: dict):
-        msg = adapt_bar_row(row, provider=provider, schema=schema, part="snapshot") if is_bars \
-              else adapt_trade_row(row, provider=provider, schema=schema, part="snapshot")
+        msg = adapt_bar_row(row, provider=provider, schema=schema, part="snapshot", fields_list=fields_list) if is_bars \
+              else adapt_trade_row(row, provider=provider, schema=schema, part="snapshot", fields_list=fields_list)
         await ws.send_text(json.dumps(msg))
 
     async def emit_replay_row_async(part: str, row: dict):
-        msg = adapt_bar_row(row, provider=provider, schema=schema, part=part) if is_bars \
-              else adapt_trade_row(row, provider=provider, schema=schema, part=part)
+        msg = adapt_bar_row(row, provider=provider, schema=schema, part=part, fields_list=fields_list) if is_bars \
+              else adapt_trade_row(row, provider=provider, schema=schema, part=part, fields_list=fields_list)
         await ws.send_text(json.dumps(msg))
 
     # Bridges from sync → async

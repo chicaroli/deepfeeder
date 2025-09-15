@@ -186,11 +186,14 @@ _OHLCV_5M = (
         agg.min_('Low=Low'),
         agg.last('Close=Close'),
         agg.sum_('Volume=Volume'),
+        # IsFinal is true only if all underlying 1m bars are final (logical AND)
+        agg.min_('IsFinal=IsFinal'),
         ],
         by=['Exchange', 'Symbol', 'Timestamp'])
     .update_view([
         'BarId = (long) ((Timestamp - lowerBin(Timestamp, DAY)) / (5 * MINUTE))',
         ])
+    .view(list(TV_BARS_SCHEMA_COLS))
 )
 
 def tv_ohlcv_5m():

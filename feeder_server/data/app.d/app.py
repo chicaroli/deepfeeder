@@ -89,30 +89,31 @@ try:
 
 
     # Warm replay into DH from Journal (if enabled and possible) ------------------------
-    WINDOW_SECS = os.getenv("DEEPFEEDER_REPLAY_WINDOW_SECS", "21600")  # default: 6 hours
-    since = time.time_ns() - int(WINDOW_SECS) * 1_000_000_000
-    rows, last_ts = hydrate_dh_from_journal(
-        journal=journal,
-        dh_sink=dh_sink,
-        since_ts_ns=since,
-        provider_filter=None,  # or {"binance","tradingview"}
-        stream_filter=None,  # or {"trades","quotes","bars"}
-        page_rows=20_000,
-    )
-    _log(f"Warmup wrote {rows} rows from Journal (since_ts_ns={since})", name="WARMUP")
+    if os.getenv("DEEPFEEDER_REPLAY_ON_START", "0") not in ("0", "false", "False"):
+        WINDOW_SECS = os.getenv("DEEPFEEDER_REPLAY_WINDOW_SECS", "21600")  # default: 6 hours
+        since = time.time_ns() - int(WINDOW_SECS) * 1_000_000_000
+        rows, last_ts = hydrate_dh_from_journal(
+            journal=journal,
+            dh_sink=dh_sink,
+            since_ts_ns=since,
+            provider_filter=None,  # or {"binance","tradingview"}
+            stream_filter=None,  # or {"trades","quotes","bars"}
+            page_rows=20_000,
+        )
+        _log(f"Warmup wrote {rows} rows from Journal (since_ts_ns={since})", name="WARMUP")
 
-    # After warmup, set DH replay cursor so it does NOT replay the WAL.
-    # Use the durable event_store's last_committed batch id (not the timestamp returned by warmup).
-    try:
-        last_committed = event_store.last_committed()
-        journal.set_watermark(int(last_committed), "dh_consumer:cursor")
-    except Exception:
-        # best-effort: if we cannot read event_store, fall back to previous behavior
+        # After warmup, set DH replay cursor so it does NOT replay the WAL.
+        # Use the durable event_store's last_committed batch id (not the timestamp returned by warmup).
         try:
-            if last_ts and last_ts > 0:
-                journal.set_watermark(last_ts, "dh_consumer:cursor")
+            last_committed = event_store.last_committed()
+            journal.set_watermark(int(last_committed), "dh_consumer:cursor")
         except Exception:
-            pass
+            # best-effort: if we cannot read event_store, fall back to previous behavior
+            try:
+                if last_ts and last_ts > 0:
+                    journal.set_watermark(last_ts, "dh_consumer:cursor")
+            except Exception:
+                pass
 
     # Set the bus’ DH cursor from the watermark (fallback to committed tail) ------------
     dh_start = journal.get_watermark("dh_consumer:cursor")

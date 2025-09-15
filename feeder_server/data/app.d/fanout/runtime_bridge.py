@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 import json
-from typing import Optional, Iterable, Dict, Any, Callable
+from typing import Optional, Iterable, Dict, Any
 from pandas import Timestamp as _PdTs
 import pyarrow as pa
 
@@ -26,7 +26,13 @@ def _ts_to_iso(ts_val) -> str | None:
             return str(ts_val)
 
 def _phase_from_part(part: str) -> str:
-    return {"added": "open", "updated": "update", "completed": "close", "snapshot": "snapshot"}.get(part, "update")
+    return {
+        "added": "open",
+        "updated": "update",
+        "completed": "close",
+        "snapshot": "snapshot",
+        "trade": "trade"
+    }.get(part, "update")
 
 def _res_from_schema(schema: str) -> str | None:
     # e.g., "ohlcv_5m" → "5m"; anything else → None
@@ -36,35 +42,58 @@ def _res_from_schema(schema: str) -> str | None:
 
 # ---------- row mappers (bars/trades) ----------
 
-def adapt_bar_row(row: Dict[str, Any], *, provider: str, schema: str, part: str) -> Dict[str, Any]:
-    return {
-        "type": "bar",
-        "exchange": provider.upper(),                    # adjust if you keep exchange elsewhere
-        "symbol": row.get("Symbol"),
-        "res": _res_from_schema(schema),
-        "bar_id": int(row.get("BarId")) if row.get("BarId") is not None else None,
-        "ts": _ts_to_iso(row.get("Timestamp")),
-        "open": row.get("Open"),
-        "high": row.get("High"),
-        "low": row.get("Low"),
-        "close": row.get("Close"),
-        "volume": row.get("Volume"),
-        "closed": part in ("completed", "snapshot"),
-        "phase": _phase_from_part(part),
+def adapt_bar_row(row: Dict[str, Any], *, provider: str, schema: str, part: str,
+                  fields_list: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+    resp = {
+        "Type": "bar",
+        "Phase": _phase_from_part(part),
+        "Provider": row.get("Provider", provider),
+        "Symbol": row.get("Symbol"),
+        "Timestamp": _ts_to_iso(row.get("Timestamp"))
     }
+    if fields_list is None or "Exchange" in fields_list:
+        resp["Exchange"] = row.get("Exchange", None)
+    if fields_list is None or "BarId" in fields_list:
+        resp["BarId"] = int(row.get("BarId")) if row.get("BarId") is not None else None
+    if fields_list is None or "Open" in fields_list:
+        resp["Open"] = row.get("Open")
+    if fields_list is None or "High" in fields_list:
+        resp["High"] = row.get("High")
+    if fields_list is None or "Low" in fields_list:
+        resp["Low"] = row.get("Low")
+    if fields_list is None or "Close" in fields_list:
+        resp["Close"] = row.get("Close")
+    if fields_list is None or "Volume" in fields_list:
+        resp["Volume"] = row.get("Volume")
+    resp["Res"] = _res_from_schema(schema)
+    resp["Closed"] = part in ("completed", "snapshot")
+    return resp
 
-def adapt_trade_row(row: Dict[str, Any], *, provider: str, schema: str, part: str) -> Dict[str, Any]:
-    return {
-        "type": "trade",
-        "exchange": provider.upper(),
-        "symbol": row.get("Symbol"),
-        "trade_id": row.get("TradeId"),
-        "price": row.get("Price"),
-        "qty": row.get("Qty"),
-        "ts_ns": row.get("Ts"),
-        "side": row.get("Side"),
-        "phase": "trade",
+def adapt_trade_row(row: Dict[str, Any], *, provider: str, schema: str, part: str,
+                    fields_list: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+    resp = {
+        "Type": "trade",
+        "Phase": _phase_from_part(part),
+        "Provider": row.get("Provider", provider),
+        "Symbol": row.get("Symbol"),
+        # Ensure JSON-serializable timestamp (ISO string)
+        "Timestamp": _ts_to_iso(row.get("Timestamp") or row.get("Ts")),
     }
+    if fields_list is None or "Exchange" in fields_list:
+        resp["Exchange"] = row.get("Exchange", None)
+    if fields_list is None or "TradeID" in fields_list:
+        resp["TradeID"] = row.get("TradeID")
+    if fields_list is None or "Price" in fields_list:
+        resp["Price"] = row.get("Price")
+    if fields_list is None or "Quantity" in fields_list:
+        resp["Quantity"] = row.get("Quantity")
+    if fields_list is None or "BuyerID" in fields_list:
+        resp["BuyerID"] = row.get("BuyerID", None)
+    if fields_list is None or "SellerID" in fields_list:
+        resp["SellerID"] = row.get("SellerID", None)
+    if fields_list is None or "IsBuyerMaker" in fields_list:
+        resp["IsBuyerMaker"] = row.get("IsBuyerMaker", None)
+    return resp
 
 def _is_bar_schema(provider: str, schema: str) -> bool:
     spec = SCHEMAS.get((provider, schema))

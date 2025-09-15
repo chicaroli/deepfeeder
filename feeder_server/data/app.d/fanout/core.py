@@ -241,8 +241,7 @@ class MarketFeeder:
 
         # Column filtering (case-insensitive)
         if fields:
-            want = {f.lower() for f in fields}
-            keep = [n for n in arr.schema.names if n.lower() in want]
+            keep = [n for n in arr.schema.names if n in fields or n in ["Symbol", "Timestamp"]]
             arr = arr.select(keep) if keep else pa.table({})
         return arr
 
