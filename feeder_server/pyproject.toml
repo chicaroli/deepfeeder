@@ -1,19 +1,20 @@
 [project]
-name = "deepfeeder-client"
+name = "deepfeeder-server"
 version = "1.0.0"
 description = "DeepFeeder is a real-time market data feeder framework built on Deephaven"
-readme = "README.md"
 requires-python = ">=3.10"
 authors = [
     {name = "Rodrigo Chicaroli", email = "chicaroli@gmail.com"}
 ]
 dependencies = [
-    "pydeephaven>=0.32.0",
+    "websocket-client>=1.8.0",
+    "pyarrow>=14",
+    "duckdb>=1.3.2",
+    "requests>=2.31.0",
+    "tradingview-datafeed>=2.1.1",
+    "fastapi>=0.116.1",
+    "uvicorn>=0.35.0",
 ]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
 
 [tool.uv]
 dev-dependencies = ["pytest", "ruff", "mypy"]
@@ -40,5 +41,3 @@ markers = [
   "integration: slower tests that touch disk/threads",
   "dh: requires Deephaven runtime",
 ]
-
-

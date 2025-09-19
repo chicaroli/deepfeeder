@@ -96,52 +96,46 @@ async def ws_stream(
     fields_list: Optional[Iterable[str]] = [f.strip() for f in fields.split(",")] if fields else None
     is_bars = _is_bar_schema(provider, schema)
 
-    # Async helpers to send rows to this socket
-    async def emit_snapshot_row(row: dict):
-        msg = adapt_bar_row(row, provider=provider, schema=schema, part="snapshot", fields_list=fields_list) if is_bars \
-              else adapt_trade_row(row, provider=provider, schema=schema, part="snapshot", fields_list=fields_list)
-        await ws.send_text(json.dumps(msg))
+    # Unified JSON envelope sender
+    async def send_event(env: dict):
+        try:
+            await ws.send_text(json.dumps(env))
+        except Exception:
+            try:
+                await ws.close(code=1011)
+            except Exception:
+                pass
 
-    async def emit_replay_row_async(part: str, row: dict):
-        msg = adapt_bar_row(row, provider=provider, schema=schema, part=part, fields_list=fields_list) if is_bars \
-              else adapt_trade_row(row, provider=provider, schema=schema, part=part, fields_list=fields_list)
-        await ws.send_text(json.dumps(msg))
+    # Sync shim to schedule async send on the current loop
+    def emit_event_sync(env: dict):
+        asyncio.get_event_loop().create_task(send_event(env))
 
-    # Bridges from sync → async
-    def emit_snapshot_row_sync(row: dict):
-        asyncio.get_event_loop().create_task(emit_snapshot_row(row))
-
-    def emit_replay_row_sync(part: str, row: dict):
-        asyncio.get_event_loop().create_task(emit_replay_row_async(part, row))
-
-    # 1) Snapshot + short replay (gapless attach) under DH context
+    # Attach gapless (snapshot -> snapshot_boundary -> replay -> live) using unified envelopes
     try:
         with use_dh_ctx():
             handle, wm_ns = market_feeder.attach_gapless(
-                provider, schema, symbol,
-                emit_snapshot_row=emit_snapshot_row_sync,
-                emit_replay_row=emit_replay_row_sync,
+                provider,
+                schema,
+                symbol,
+                emit_event=emit_event_sync,
                 fields=fields_list,
                 only_completed=(only_completed if only_completed is not None else is_bars),
                 start_ns=since_ns,
+                snapshot_batch=True,
             )
-        # We only needed to ensure the listener exists; drop the temporary handle
-        with use_dh_ctx():
-            market_feeder.unsubscribe(handle)
     except Exception:
         await ws.close(code=1011)
         return
 
-    # 2) Live stream using the proven subscription path (subscribe also needs DH context)
-    pipe = ConnPipe(provider, schema, symbol, maxsize=5000)
+    # Keep the websocket open to continue receiving live envelopes
     try:
-        with use_dh_ctx():
-            pipe.attach(fields=fields_list, only_completed=only_completed)
         while True:
-            payload = await pipe.q.get()
-            await ws.send_text(payload)
+            await asyncio.sleep(3600)
     except WebSocketDisconnect:
         pass
     finally:
-        with use_dh_ctx():
-            pipe.detach()
+        try:
+            with use_dh_ctx():
+                market_feeder.unsubscribe(handle)
+        except Exception:
+            pass

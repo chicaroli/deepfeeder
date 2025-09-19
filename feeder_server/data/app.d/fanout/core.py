@@ -33,12 +33,20 @@ class MarketFeeder:
         self._hb.beat("starting", meta={"listeners": 0, "subs": 0})
         self._last_core_meta_ts = 0.0
         self._core_meta_interval = float(os.getenv("DEEPFEEDER_FANOUT_CORE_HEARTBEAT_MIN_INTERVAL", "5"))
+        # Sequence counters for unified event streams per (provider|schema|symbol)
+        self._seqs: Dict[str, int] = {}
 
     @staticmethod
     def _key(provider: str, schema: str, symbol: str) -> str:
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per subscription is allowed. 'symbol' must be a string.")
         return f"{provider}|{schema}|{symbol}"
+
+    def _next_seq(self, key: str) -> int:
+        """Return next monotonic integer for this stream and increment it."""
+        v = self._seqs.get(key, 0)
+        self._seqs[key] = v + 1
+        return v
 
     def _ensure_listener(self, provider: str, data_schema: str, symbol: str):
         key = self._key(provider, data_schema, symbol)
@@ -83,14 +91,19 @@ class MarketFeeder:
             buf_len = 256
         # Event: creating listener
         try:
-            emit_event("fanout", f"{provider}:{data_schema}:{symbol}", "core", "INFO", "LISTENER_CREATE", "Creating listener", {"provider": provider, "schema": data_schema, "symbol": symbol, "buf_len": buf_len})
+            emit_event(
+                "fanout", f"{provider}:{data_schema}:{symbol}", "core", "INFO", "LISTENER_CREATE", "Creating listener",
+                {"provider": provider, "schema": data_schema, "symbol": symbol, "buf_len": buf_len}
+            )
         except Exception:
             pass
         lsn = _SymListener(provider, data_schema, symbol, spec, view, emit_completed, buf_maxlen=buf_len)
         lsn.start()
         # Event: listener started
         try:
-            emit_event("fanout", f"{provider}:{data_schema}:{symbol}", "core", "INFO", "LISTENER_START", "Listener started")
+            emit_event(
+                "fanout", f"{provider}:{data_schema}:{symbol}", "core", "INFO", "LISTENER_START", "Listener started"
+            )
         except Exception:
             pass
         # require explicit start, reintroduce with a defensive try/except similar to _SymListener.start().
@@ -188,8 +201,8 @@ class MarketFeeder:
             pass
         return len(handles)
 
+    @staticmethod
     def snapshot_range(
-        self,
         provider: str,
         data_schema: str,
         symbol: str,
@@ -230,13 +243,16 @@ class MarketFeeder:
             flts.append(dff.Filter.from_(f"Exchange == `{exchange.upper()}`"))
         if start_ns is not None:
             start_dt = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=timezone.utc)
-            flts.append(dff.Filter.from_(f"{spec.time_col} >= {start_dt.isoformat()}"))
+            # Use Instant.parse for Deephaven compatibility
+            flts.append(
+                dff.Filter.from_(f'{spec.time_col} >= Instant.parse("{start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")}")'))
         if end_ns is not None:
             end_dt = datetime.fromtimestamp(end_ns / 1_000_000_000, tz=timezone.utc)
-            flts.append(dff.Filter.from_(f"{spec.time_col} <= {end_dt.isoformat()}"))
+            flts.append(
+                dff.Filter.from_(f'{spec.time_col} <= Instant.parse("{end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")}")'))
 
         # Query DH object
-        t = base.where(*flts).view(list(spec.cols)).sort([spec.time_col])
+        t = base.where(flts).view(list(spec.cols)).sort([spec.time_col])
         arr = to_arrow(t)
 
         # Column filtering (case-insensitive)
@@ -265,13 +281,12 @@ class MarketFeeder:
             data_schema: str,
             symbol: str,
             since_ns: Optional[int],
-            emit: Callable[[str, dict], None],
+            *,
+            emit_event: Callable[[dict], None],
             fields: Optional[Iterable[str]] = None,
     ) -> int:
-        """
-        Row-wise replay from the listener ring buffer for batches newer than since_ns (epoch ns).
-        Calls: emit(part, row_dict) for each row, where part ∈ {'added','updated','completed'}.
-        Returns total rows emitted.
+        """Replay buffered listener messages (batches) newer than since_ns, emitting unified JSON events per non-empty part.
+        Returns the number of events emitted.
         """
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per replay is allowed. 'symbol' must be a string.")
@@ -279,23 +294,7 @@ class MarketFeeder:
         lsn = self._lsn.get(key)
         if not lsn:
             return 0
-        cols_req = {f.lower() for f in fields} if fields else None
-
-        def _iter_rows(tbl: Optional[pa.Table]) -> Iterator[dict]:
-            if tbl is None:
-                return iter(())
-            sel = tbl
-            if cols_req:
-                try:
-                    names = list(tbl.schema.names)
-                    keep = [n for n in names if n.lower() in cols_req]
-                    sel = tbl.select(keep) if keep else None
-                except Exception:
-                    sel = tbl
-            return iter(()) if sel is None else iter(sel.to_pylist())
-
-        total = 0
-        # Work on a static copy of the ring to avoid concurrent mutation surprises
+        emitted = 0
         for msg in list(lsn.buf):
             meta = msg.get("meta") or {}
             ts_ns = meta.get("ts_ns")
@@ -305,11 +304,83 @@ class MarketFeeder:
                     continue
                 ts_ns = int(pd.Timestamp(ts_iso, tz="UTC").value)
             if since_ns is None or ts_ns > since_ns:
-                for part in ("added", "updated", "completed"):
-                    for row in _iter_rows(msg.get(part)):
-                        emit(part, row)
-                        total += 1
-        return total
+                try:
+                    emitted += self._emit_tables_as_events(
+                        phase="replay",
+                        provider=provider,
+                        data_schema=data_schema,
+                        symbol=symbol,
+                        key=key,
+                        msg=msg,
+                        emit_event=emit_event,
+                        watermark_ns=None,
+                        fields=fields,
+                    )
+                except Exception:
+                    pass
+        return emitted
+
+    def _emit_tables_as_events(
+            self,
+            *,
+            phase: str,
+            provider: str,
+            data_schema: str,
+            symbol: str,
+            key: str,
+            msg: dict,
+            emit_event: Callable[[dict], None],
+            watermark_ns: Optional[int] = None,
+            fields: Optional[Iterable[str]] = None,
+    ) -> int:
+        """Convert an in-memory batch msg with Arrow tables into JSON row events and emit one per non-empty part.
+        Returns the number of events emitted.
+        """
+        parts = ("added", "updated", "completed")
+        meta = dict(msg.get("meta") or {})
+        # Add stream identity to meta for convenience
+        meta.setdefault("provider", provider)
+        meta.setdefault("data_schema", data_schema)
+        meta.setdefault("symbol", symbol)
+        meta.setdefault("only_completed", False)
+        if fields:
+            try:
+                meta.setdefault("fields", list(fields))
+            except Exception:
+                pass
+        events = 0
+        for part in parts:
+            tbl = msg.get(part)
+            try:
+                n = getattr(tbl, "num_rows", 0)
+            except Exception:
+                n = 0
+            if not tbl or n == 0:
+                continue
+            try:
+                rows = tbl.to_pylist()
+            except Exception:
+                # Fallback: deliver empty if conversion fails
+                rows = []
+            env = {
+                "version": 1,
+                "phase": phase,
+                "part": part,
+                "provider": provider,
+                "data_schema": data_schema,
+                "symbol": symbol,
+                "row_mode": True,
+                "rows": rows,
+                "watermark_ns": None if phase != "snapshot" else watermark_ns,
+                "meta": {**meta, "seq": self._next_seq(key)},
+            }
+            try:
+                emit_event(env)
+                events += 1
+            except Exception:
+                # continue best-effort for other parts
+                pass
+        return events
 
     def attach_gapless(
             self,
@@ -317,57 +388,153 @@ class MarketFeeder:
             data_schema: str,
             symbol: str,
             *,
-            emit_snapshot_row: Callable[[dict], None],
-            emit_replay_row: Callable[[str, dict], None],
+            emit_event: Callable[[dict], None],
             fields: Optional[Iterable[str]] = None,
             only_completed: bool = True,
             start_ns: Optional[int] = None,
+            snapshot_batch: bool = True,
     ) -> Tuple[str, Optional[int]]:
-        """
-        Gapless attach helper:
-          1) Ensure/subscribe to live (returns handle).
-          2) Emit a 'snapshot' (rows) using snapshot_range() from start_ns (defaults to UTC day start).
-          3) Compute watermark_ns as last row time from snapshot (bars: last *completed* bar).
-          4) Emit a short replay from ring buffer newer than watermark.
-        Returns (handle, watermark_ns).
+        """Attach to a stream and emit JSON-only unified events across phases: snapshot, snapshot_boundary, replay, live.
+
+        - emit_event receives a dict with keys: version, phase, part, provider, data_schema, symbol,
+          row_mode=True, rows=[...], watermark_ns (for snapshot & boundary), meta={...}.
+        - For live, one event per non-empty part is emitted.
+        - For snapshot, by default a single batched event with all rows is emitted (snapshot_batch=True).
+        Returns (subscription_handle, watermark_ns).
         """
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per gapless attach is allowed. 'symbol' must be a string.")
         spec = SCHEMAS.get((provider, data_schema))
         if spec is None:
             raise ValueError(f"Unknown provider/schema: {provider}/{data_schema}")
+        key = self._key(provider, data_schema, symbol)
+        # Reset per-stream sequence at attach start
+        self._seqs[key] = 0
 
-        # 1) live subscription (proven path)
-        handle = self.subscribe(provider, data_schema, symbol, callback=lambda _: None,
+        # Live subscription: wrap DH tables into JSON events
+        def _live_cb(msg: dict):
+            m = dict(msg or {})
+            mm = dict(m.get("meta") or {})
+            mm["only_completed"] = bool(only_completed)
+            m["meta"] = mm
+            try:
+                self._emit_tables_as_events(
+                    phase="live", provider=provider, data_schema=data_schema, symbol=symbol, key=key,
+                    msg=m, emit_event=emit_event, watermark_ns=None, fields=fields)
+            except Exception:
+                pass
+
+        handle = self.subscribe(provider, data_schema, symbol, callback=_live_cb,
                                 fields=fields, only_completed=only_completed)
 
-        # 2) snapshot (default to UTC day start)
+        # Compute default start if not provided
         if start_ns is None:
-            day_start = pd.Timestamp.utcnow().normalize().tz_localize("UTC")
-            start_ns = int(day_start.value)
-        snap_tbl = self.snapshot_range(provider, data_schema, symbol, start_ns=start_ns, fields=fields)
-        snap_py = snap_tbl.to_pylist()
-        for row in snap_py:
-            emit_snapshot_row(row)
-
-        # 3) watermark_ns
-        wm_ns: Optional[int] = None
-        if snap_py:
-            # Bars: last completed bar is previous row; trades: last row
-            if spec.bin_period_minutes and len(snap_py) >= 2:
-                last_completed = snap_py[-2]
-                ts_val = last_completed.get(spec.time_col) or last_completed.get("Timestamp") or last_completed.get(
-                    "Ts")
+            day_start = pd.Timestamp.utcnow().normalize()
+            if day_start.tzinfo is None:
+                day_start = day_start.tz_localize("UTC")
             else:
-                ts_val = snap_py[-1].get(spec.time_col) or snap_py[-1].get("Timestamp") or snap_py[-1].get("Ts")
+                day_start = day_start.tz_convert("UTC")
+            start_ns = int(day_start.value)
+
+        # Snapshot as a single batched event (JSON rows)
+        snap_tbl = self.snapshot_range(provider, data_schema, symbol, start_ns=start_ns, fields=fields)
+        snap_rows = snap_tbl.to_pylist() if snap_tbl is not None else []
+        # Emit snapshot event(s)
+        if snapshot_batch:
+            env = {
+                "version": 1,
+                "phase": "snapshot",
+                "part": "completed",  # snapshot contains completed history
+                "provider": provider,
+                "data_schema": data_schema,
+                "symbol": symbol,
+                "row_mode": True,
+                "rows": snap_rows,
+                "watermark_ns": None,  # filled after computing wm
+                "meta": {
+                    "seq": self._next_seq(key),
+                    "only_completed": bool(only_completed),
+                    "fields": list(fields) if fields else [],
+                    "start_ns": int(start_ns) if start_ns is not None else None,
+                    "end_ns": None,
+                },
+            }
             try:
-                wm_ns = int(pd.Timestamp(ts_val, tz="UTC").value)
+                emit_event(env)
             except Exception:
+                pass
+        else:
+            for row in snap_rows:
+                env = {
+                    "version": 1,
+                    "phase": "snapshot",
+                    "part": "completed",
+                    "provider": provider,
+                    "data_schema": data_schema,
+                    "symbol": symbol,
+                    "row_mode": True,
+                    "rows": [row],
+                    "watermark_ns": None,
+                    "meta": {
+                        "seq": self._next_seq(key),
+                        "only_completed": bool(only_completed),
+                        "fields": list(fields) if fields else [],
+                        "start_ns": int(start_ns) if start_ns is not None else None,
+                        "end_ns": None,
+                    },
+                }
+                try:
+                    emit_event(env)
+                except Exception:
+                    pass
+
+        # Compute watermark (robust logic)
+        wm_ns: Optional[int] = None
+        if snap_rows:
+            candidate_idx = -1
+            if spec.bin_period_minutes:
+                last_row = snap_rows[-1]
+                is_final = any(last_row.get(k) is True for k in ("IsFinal", "is_final", "Final", "final"))
+                if not is_final and len(snap_rows) >= 2:
+                    candidate_idx = -2
+            ts_val = (snap_rows[candidate_idx].get(spec.time_col) or
+                      snap_rows[candidate_idx].get("Timestamp") or
+                      snap_rows[candidate_idx].get("Ts"))
+            try:
+                ts_obj = pd.Timestamp(ts_val)
+                if ts_obj.tzinfo is None:
+                    ts_obj = ts_obj.tz_localize("UTC")
+                else:
+                    ts_obj = ts_obj.tz_convert("UTC")
+                wm_ns = int(ts_obj.value)
+            except Exception as e:
+                try:
+                    print(f"[attach_gapless] watermark parse failed: {ts_val!r} ({type(ts_val)}) -> {e}")
+                except Exception:
+                    pass
                 wm_ns = None
 
-        # 4) short replay from ring buffer (row-wise)
+        # Emit snapshot boundary marker
+        boundary_env = {
+            "version": 1,
+            "phase": "snapshot_boundary",
+            "part": None,
+            "provider": provider,
+            "data_schema": data_schema,
+            "symbol": symbol,
+            "row_mode": True,
+            "rows": [],
+            "watermark_ns": wm_ns,
+            "meta": {"seq": self._next_seq(key), "only_completed": bool(only_completed)},
+        }
         try:
-            self.replay_since_ns(provider, data_schema, symbol, wm_ns, emit=emit_replay_row, fields=fields)
+            emit_event(boundary_env)
+        except Exception:
+            pass
+
+        # Replay any buffered batches newer than watermark as unified events
+        try:
+            self.replay_since_ns(provider, data_schema, symbol, wm_ns, emit_event=emit_event, fields=fields)
         except Exception:
             pass
 
