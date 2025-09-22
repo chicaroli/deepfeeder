@@ -28,6 +28,10 @@ feeder_client/
 ## Development
 
 ### Prerequisites
+```sh
+  uv pip install -e feeder_client
+```
+
 - Docker and Docker Compose
 - VSCode (recommended for remote development)
 - **Linux host or container required for Deephaven Ticking support**

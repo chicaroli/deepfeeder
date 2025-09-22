@@ -225,6 +225,7 @@ version = "1.0.0"
 source = { editable = "feeder_client" }
 dependencies = [
     { name = "pydeephaven" },
+    { name = "websocket-client" },
 ]
 
 [package.dev-dependencies]
@@ -235,7 +236,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydeephaven", specifier = ">=0.32.0" }]
+requires-dist = [
+    { name = "pydeephaven", specifier = ">=0.32.0" },
+    { name = "websocket-client", specifier = ">=1.8.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [

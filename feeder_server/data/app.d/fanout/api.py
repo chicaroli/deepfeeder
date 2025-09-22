@@ -7,7 +7,8 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 from fanout.core import market_feeder, SCHEMAS
 from fanout.dh_ctx import use_dh_ctx
-from .runtime_bridge import ConnPipe, adapt_bar_row, adapt_trade_row, _is_bar_schema
+from runtime.eventlog import emit_event
+from .runtime_bridge import adapt_bar_row, adapt_trade_row, _is_bar_schema
 
 router = APIRouter()
 
@@ -92,25 +93,113 @@ async def ws_stream(
     fields: Optional[str] = Query(None, description="comma-separated column list to project"),
     only_completed: Optional[bool] = Query(None, description="bars default True; trades default False"),
 ):
+    # Accept and acknowledge
     await ws.accept()
+    # Log connection
+    emit_event(
+        "fanout", f"{provider}:{schema}:{symbol}", "api", "INFO", "WS_CONNECTED",
+        "WebSocket client connected",
+        {
+            "since_ns": since_ns,
+            "fields": fields.split(",") if fields else [],
+            "only_completed": only_completed,
+        },
+    )
+    # Send connected ack
+    try:
+        await ws.send_text(json.dumps({
+            "version": 1,
+            "phase": "connected",
+            "provider": provider,
+            "data_schema": schema,
+            "symbol": symbol,
+            "since_ns": since_ns,
+        }))
+    except Exception as e:
+        print(f"[ws_stream] failed to send connected ack: {e!r}")
+        emit_event(
+            "fanout", f"{provider}:{schema}:{symbol}", "api", "ERROR", "WS_ACK_FAIL",
+            "Failed sending connected ack", {"error": str(e)}
+        )
+        try:
+            await ws.close(code=1011)
+        except Exception:
+            pass
+        return
+
     fields_list: Optional[Iterable[str]] = [f.strip() for f in fields.split(",")] if fields else None
     is_bars = _is_bar_schema(provider, schema)
 
-    # Unified JSON envelope sender
+    loop = asyncio.get_running_loop()
+
+    # State for graceful shutdown of this connection
+    closed = False
+    unsub_done = False
+    handle: Optional[str] = None
+    send_err_count = 0
+
+    async def _do_unsubscribe():
+        nonlocal unsub_done, handle
+        if unsub_done:
+            return
+        try:
+            with use_dh_ctx():
+                if handle:
+                    market_feeder.unsubscribe(handle)
+        except Exception:
+            pass
+        unsub_done = True
+
     async def send_event(env: dict):
+        nonlocal closed, send_err_count
+        if closed:
+            return
         try:
             await ws.send_text(json.dumps(env))
-        except Exception:
+        except Exception as e:
+            send_err_count += 1
+            if send_err_count <= 1:
+                print(f"[ws_stream] send_event error: {e!r}; closing WS (suppressed further logs)")
+                emit_event(
+                    "fanout", f"{provider}:{schema}:{symbol}", "api", "WARN", "WS_SEND_ERR",
+                    "Error sending frame; closing WS", {"error": str(e)}
+                )
+            closed = True
+            # Best-effort close and unsubscribe immediately to stop further emissions
             try:
                 await ws.close(code=1011)
             except Exception:
                 pass
+            try:
+                loop.create_task(_do_unsubscribe())
+            except Exception:
+                pass
 
-    # Sync shim to schedule async send on the current loop
+    def _adapt_rows(env: dict) -> dict:
+        try:
+            phase = env.get("phase")
+            part = env.get("part") or "completed"
+            rows = env.get("rows") or []
+            if phase in ("snapshot", "replay", "live") and rows:
+                if is_bars:
+                    rows_adapted = [adapt_bar_row(r, provider=provider, schema=schema, part=part, fields_list=fields_list) for r in rows]
+                else:
+                    rows_adapted = [adapt_trade_row(r, provider=provider, schema=schema, part=part, fields_list=fields_list) for r in rows]
+                env = {**env, "rows": rows_adapted}
+        except Exception:
+            pass
+        return env
+
     def emit_event_sync(env: dict):
-        asyncio.get_event_loop().create_task(send_event(env))
+        if closed:
+            return
+        try:
+            env = _adapt_rows(env)
+            loop.call_soon_threadsafe(asyncio.create_task, send_event(env))
+        except RuntimeError:
+            pass
 
-    # Attach gapless (snapshot -> snapshot_boundary -> replay -> live) using unified envelopes
+    # Attach with logging
     try:
         with use_dh_ctx():
             handle, wm_ns = market_feeder.attach_gapless(
@@ -123,19 +212,50 @@ async def ws_stream(
                 start_ns=since_ns,
                 snapshot_batch=True,
             )
-    except Exception:
-        await ws.close(code=1011)
+        emit_event(
+            "fanout", f"{provider}:{schema}:{symbol}", "api", "INFO", "WS_ATTACH_OK",
+            "Client attached gapless", {"handle": handle, "watermark_ns": wm_ns}
+        )
+    except Exception as e:
+        # Send error frame + log
+        try:
+            await ws.send_text(json.dumps({
+                "version": 1,
+                "phase": "error",
+                "message": str(e),
+                "provider": provider,
+                "data_schema": schema,
+                "symbol": symbol,
+            }))
+        except Exception:
+            pass
+        emit_event(
+            "fanout", f"{provider}:{schema}:{symbol}", "api", "ERROR", "WS_ATTACH_ERR",
+            "attach_gapless failed", {"error": str(e)}
+        )
+        try:
+            await ws.close(code=1011)
+        except Exception:
+            pass
         return
 
-    # Keep the websocket open to continue receiving live envelopes
+    # Block until the client disconnects; this makes cleanup timely
     try:
         while True:
-            await asyncio.sleep(3600)
+            try:
+                _ = await ws.receive_text()
+                # Optionally handle incoming client messages here
+            except Exception:
+                await asyncio.sleep(0)
     except WebSocketDisconnect:
         pass
     finally:
+        # Ensure we unsubscribe if not already done
         try:
-            with use_dh_ctx():
-                market_feeder.unsubscribe(handle)
+            await _do_unsubscribe()
         except Exception:
             pass
+        emit_event(
+            "fanout", f"{provider}:{schema}:{symbol}", "api", "INFO", "WS_DISCONNECTED",
+            "WebSocket client disconnected", {"handle": handle}
+        )

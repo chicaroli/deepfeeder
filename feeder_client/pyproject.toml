@@ -9,6 +9,7 @@ authors = [
 ]
 dependencies = [
     "pydeephaven>=0.32.0",
+    "websocket-client>=1.8.0",
 ]
 
 [build-system]
@@ -40,5 +41,3 @@ markers = [
   "integration: slower tests that touch disk/threads",
   "dh: requires Deephaven runtime",
 ]
-
-

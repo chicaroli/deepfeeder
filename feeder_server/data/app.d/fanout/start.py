@@ -13,6 +13,17 @@ HOST = os.getenv("FANOUT_HOST", "0.0.0.0")
 PORT = int(os.getenv("FANOUT_PORT", "8081"))
 LOG_LEVEL = os.getenv("FANOUT_LOG_LEVEL", "info")
 
+# WS config: prefer native ping/pong via 'websockets' implementation
+WS_IMPL = os.getenv("FANOUT_WS_IMPL", "websockets")  # websockets | wsproto | auto
+try:
+    WS_PING_INTERVAL = float(os.getenv("FANOUT_WS_PING_INTERVAL", "30"))
+except Exception:
+    WS_PING_INTERVAL = 30.0
+try:
+    WS_PING_TIMEOUT = float(os.getenv("FANOUT_WS_PING_TIMEOUT", "15"))
+except Exception:
+    WS_PING_TIMEOUT = 15.0
+
 _server: uvicorn.Server | None = None
 _thread: threading.Thread | None = None
 
@@ -29,6 +40,9 @@ def _run_uvicorn():
         lifespan="off",     # keep simple; we don't need ASGI lifespan here
         access_log=False,
         proxy_headers=True,
+        ws=WS_IMPL,
+        ws_ping_interval=WS_PING_INTERVAL,
+        ws_ping_timeout=WS_PING_TIMEOUT,
     )
     global _server
     _server = uvicorn.Server(config)
@@ -51,4 +65,3 @@ def stop_fanout():
         pass
 
 atexit.register(stop_fanout)
-
