@@ -241,6 +241,9 @@ class MarketFeeder:
         flts = [dff.Filter.from_(f"{spec.symbol_col} == `{symbol}`")]
         if exchange and "Exchange" in spec.cols:
             flts.append(dff.Filter.from_(f"Exchange == `{exchange.upper()}`"))
+        # Exclude placeholder rows if the filled schema exposes IsEmpty
+        if "IsEmpty" in spec.cols:
+            flts.append(dff.Filter.from_("IsEmpty == false"))
         if start_ns is not None:
             start_dt = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=timezone.utc)
             # Use Instant.parse for Deephaven compatibility
@@ -275,17 +278,19 @@ class MarketFeeder:
         arr = self.snapshot_range(provider, data_schema, symbol, start_ns=start_ns, end_ns=end_ns, fields=fields)
         yield from arr.to_pylist()
 
-    def replay_since_ns(
+    def catchup_since_ns(
             self,
             provider: str,
             data_schema: str,
             symbol: str,
             since_ns: Optional[int],
             *,
-            emit_event: Callable[[dict], None],
+            emit: Callable[[dict], None],
             fields: Optional[Iterable[str]] = None,
+            only_completed: Optional[bool] = None,
     ) -> int:
-        """Replay buffered listener messages (batches) newer than since_ns, emitting unified JSON events per non-empty part.
+        """Emit buffered listener batches newer than since_ns as unified JSON events.
+        Internal catch-up used during attachment; not the future backtest/"replay" API.
         Returns the number of events emitted.
         """
         if not isinstance(symbol, str):
@@ -295,6 +300,7 @@ class MarketFeeder:
         if not lsn:
             return 0
         emitted = 0
+        parts = ("completed",) if only_completed else None
         for msg in list(lsn.buf):
             meta = msg.get("meta") or {}
             ts_ns = meta.get("ts_ns")
@@ -306,15 +312,16 @@ class MarketFeeder:
             if since_ns is None or ts_ns > since_ns:
                 try:
                     emitted += self._emit_tables_as_events(
-                        phase="replay",
+                        phase="snapshot",
                         provider=provider,
                         data_schema=data_schema,
                         symbol=symbol,
                         key=key,
                         msg=msg,
-                        emit_event=emit_event,
+                        emit=emit,
                         watermark_ns=None,
                         fields=fields,
+                        parts=parts,
                     )
                 except Exception:
                     pass
@@ -329,14 +336,15 @@ class MarketFeeder:
             symbol: str,
             key: str,
             msg: dict,
-            emit_event: Callable[[dict], None],
+            emit: Callable[[dict], None],
             watermark_ns: Optional[int] = None,
             fields: Optional[Iterable[str]] = None,
+            parts: Optional[Iterable[str]] = None,
     ) -> int:
         """Convert an in-memory batch msg with Arrow tables into JSON row events and emit one per non-empty part.
         Returns the number of events emitted.
         """
-        parts = ("added", "updated", "completed")
+        parts_iter = tuple(parts) if parts is not None else ("added", "updated", "completed")
         meta = dict(msg.get("meta") or {})
         # Add stream identity to meta for convenience
         meta.setdefault("provider", provider)
@@ -349,7 +357,7 @@ class MarketFeeder:
             except Exception:
                 pass
         events = 0
-        for part in parts:
+        for part in parts_iter:
             tbl = msg.get(part)
             try:
                 n = getattr(tbl, "num_rows", 0)
@@ -375,7 +383,7 @@ class MarketFeeder:
                 "meta": {**meta, "seq": self._next_seq(key)},
             }
             try:
-                emit_event(env)
+                emit(env)
                 events += 1
             except Exception:
                 # continue best-effort for other parts
@@ -388,7 +396,7 @@ class MarketFeeder:
             data_schema: str,
             symbol: str,
             *,
-            emit_event: Callable[[dict], None],
+            emit: Callable[[dict], None],
             fields: Optional[Iterable[str]] = None,
             only_completed: bool = True,
             start_ns: Optional[int] = None,
@@ -396,7 +404,7 @@ class MarketFeeder:
     ) -> Tuple[str, Optional[int]]:
         """Attach to a stream and emit JSON-only unified events across phases: snapshot, snapshot_boundary, replay, live.
 
-        - emit_event receives a dict with keys: version, phase, part, provider, data_schema, symbol,
+        - emit receives a dict with keys: version, phase, part, provider, data_schema, symbol,
           row_mode=True, rows=[...], watermark_ns (for snapshot & boundary), meta={...}.
         - For live, one event per non-empty part is emitted.
         - For snapshot, by default a single batched event with all rows is emitted (snapshot_batch=True).
@@ -420,7 +428,7 @@ class MarketFeeder:
             try:
                 self._emit_tables_as_events(
                     phase="live", provider=provider, data_schema=data_schema, symbol=symbol, key=key,
-                    msg=m, emit_event=emit_event, watermark_ns=None, fields=fields)
+                    msg=m, emit=emit, watermark_ns=None, fields=fields)
             except Exception:
                 pass
 
@@ -439,56 +447,8 @@ class MarketFeeder:
         # Snapshot as a single batched event (JSON rows)
         snap_tbl = self.snapshot_range(provider, data_schema, symbol, start_ns=start_ns, fields=fields)
         snap_rows = snap_tbl.to_pylist() if snap_tbl is not None else []
-        # Emit snapshot event(s)
-        if snapshot_batch:
-            env = {
-                "version": 1,
-                "phase": "snapshot",
-                "part": "completed",  # snapshot contains completed history
-                "provider": provider,
-                "data_schema": data_schema,
-                "symbol": symbol,
-                "row_mode": True,
-                "rows": snap_rows,
-                "watermark_ns": None,  # filled after computing wm
-                "meta": {
-                    "seq": self._next_seq(key),
-                    "only_completed": bool(only_completed),
-                    "fields": list(fields) if fields else [],
-                    "start_ns": int(start_ns) if start_ns is not None else None,
-                    "end_ns": None,
-                },
-            }
-            try:
-                emit_event(env)
-            except Exception:
-                pass
-        else:
-            for row in snap_rows:
-                env = {
-                    "version": 1,
-                    "phase": "snapshot",
-                    "part": "completed",
-                    "provider": provider,
-                    "data_schema": data_schema,
-                    "symbol": symbol,
-                    "row_mode": True,
-                    "rows": [row],
-                    "watermark_ns": None,
-                    "meta": {
-                        "seq": self._next_seq(key),
-                        "only_completed": bool(only_completed),
-                        "fields": list(fields) if fields else [],
-                        "start_ns": int(start_ns) if start_ns is not None else None,
-                        "end_ns": None,
-                    },
-                }
-                try:
-                    emit_event(env)
-                except Exception:
-                    pass
 
-        # Compute watermark (robust logic)
+        # Compute watermark (robust logic) BEFORE emitting snapshot so clients can resume
         wm_ns: Optional[int] = None
         if snap_rows:
             candidate_idx = -1
@@ -508,13 +468,64 @@ class MarketFeeder:
                     ts_obj = ts_obj.tz_convert("UTC")
                 wm_ns = int(ts_obj.value)
             except Exception as e:
-                try:
-                    print(f"[attach_gapless] watermark parse failed: {ts_val!r} ({type(ts_val)}) -> {e}")
-                except Exception:
-                    pass
+                print(f"[attach_gapless] watermark parse failed: {ts_val!r} ({type(ts_val)}) -> {e}")
                 wm_ns = None
 
-        # Emit snapshot boundary marker
+        # Emit snapshot event(s) including watermark_ns so clients can resume
+        if snapshot_batch:
+            env = {
+                "version": 1,
+                "phase": "snapshot",
+                "part": "completed",  # snapshot contains completed history
+                "provider": provider,
+                "data_schema": data_schema,
+                "symbol": symbol,
+                "row_mode": True,
+                "rows": snap_rows,
+                "watermark_ns": wm_ns,
+                "meta": {
+                    "seq": self._next_seq(key),
+                    "only_completed": bool(only_completed),
+                    "fields": list(fields) if fields else [],
+                    "start_ns": int(start_ns) if start_ns is not None else None,
+                    "end_ns": None,
+                },
+            }
+            try:
+                emit(env)
+            except Exception:
+                pass
+        else:
+            for row in snap_rows:
+                env = {
+                    "version": 1,
+                    "phase": "snapshot",
+                    "part": "completed",
+                    "provider": provider,
+                    "data_schema": data_schema,
+                    "symbol": symbol,
+                    "row_mode": True,
+                    "rows": [row],
+                    "watermark_ns": wm_ns,
+                    "meta": {
+                        "seq": self._next_seq(key),
+                        "only_completed": bool(only_completed),
+                        "fields": list(fields) if fields else [],
+                        "start_ns": int(start_ns) if start_ns is not None else None,
+                        "end_ns": None,
+                    },
+                }
+                try:
+                    emit(env)
+                except Exception:
+                    pass
+
+        # Replay buffered then boundary
+        try:
+            self.catchup_since_ns(provider, data_schema, symbol, wm_ns, emit=emit, fields=fields, only_completed=only_completed)
+        except Exception:
+            pass
+
         boundary_env = {
             "version": 1,
             "phase": "snapshot_boundary",
@@ -528,13 +539,7 @@ class MarketFeeder:
             "meta": {"seq": self._next_seq(key), "only_completed": bool(only_completed)},
         }
         try:
-            emit_event(boundary_env)
-        except Exception:
-            pass
-
-        # Replay any buffered batches newer than watermark as unified events
-        try:
-            self.replay_since_ns(provider, data_schema, symbol, wm_ns, emit_event=emit_event, fields=fields)
+            emit(boundary_env)
         except Exception:
             pass
 

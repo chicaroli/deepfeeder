@@ -93,12 +93,17 @@ async def ws_stream(
     fields: Optional[str] = Query(None, description="comma-separated column list to project"),
     only_completed: Optional[bool] = Query(None, description="bars default True; trades default False"),
 ):
+    def _emit_event(level: str, code: str, message: str, details: dict):
+        emit_event(
+            "fanout", f"{provider}:{schema}:{symbol}", "api", level, code,
+            message,
+            details,
+        )
+
     # Accept and acknowledge
     await ws.accept()
     # Log connection
-    emit_event(
-        "fanout", f"{provider}:{schema}:{symbol}", "api", "INFO", "WS_CONNECTED",
-        "WebSocket client connected",
+    _emit_event("INFO", "WS_CONNECTED","WebSocket client connected",
         {
             "since_ns": since_ns,
             "fields": fields.split(",") if fields else [],
@@ -117,10 +122,7 @@ async def ws_stream(
         }))
     except Exception as e:
         print(f"[ws_stream] failed to send connected ack: {e!r}")
-        emit_event(
-            "fanout", f"{provider}:{schema}:{symbol}", "api", "ERROR", "WS_ACK_FAIL",
-            "Failed sending connected ack", {"error": str(e)}
-        )
+        _emit_event("ERROR", "WS_ACK_FAIL", "Failed sending connected ack", {"error": str(e)})
         try:
             await ws.close(code=1011)
         except Exception:
@@ -160,10 +162,7 @@ async def ws_stream(
             send_err_count += 1
             if send_err_count <= 1:
                 print(f"[ws_stream] send_event error: {e!r}; closing WS (suppressed further logs)")
-                emit_event(
-                    "fanout", f"{provider}:{schema}:{symbol}", "api", "WARN", "WS_SEND_ERR",
-                    "Error sending frame; closing WS", {"error": str(e)}
-                )
+                _emit_event("WARN", "WS_SEND_ERR", "Error sending frame; closing WS", {"error": str(e)})
             closed = True
             # Best-effort close and unsubscribe immediately to stop further emissions
             try:
@@ -175,26 +174,27 @@ async def ws_stream(
             except Exception:
                 pass
 
-    def _adapt_rows(env: dict) -> dict:
-        try:
-            phase = env.get("phase")
-            part = env.get("part") or "completed"
-            rows = env.get("rows") or []
-            if phase in ("snapshot", "replay", "live") and rows:
-                if is_bars:
-                    rows_adapted = [adapt_bar_row(r, provider=provider, schema=schema, part=part, fields_list=fields_list) for r in rows]
-                else:
-                    rows_adapted = [adapt_trade_row(r, provider=provider, schema=schema, part=part, fields_list=fields_list) for r in rows]
-                env = {**env, "rows": rows_adapted}
-        except Exception:
-            pass
-        return env
-
     def emit_event_sync(env: dict):
         if closed:
             return
         try:
-            env = _adapt_rows(env)
+            # Inline row adaptation to keep code simple and avoid extra indirection
+            phase_val = env.get("phase")
+            # For snapshot envelopes, expose Phase as "snapshot" in adapted rows
+            part = "snapshot" if phase_val == "snapshot" else (env.get("part") or "completed")
+            rows = env.get("rows") or []
+            if rows:
+                if is_bars:
+                    rows_adapted = [
+                        adapt_bar_row(r, provider=provider, schema=schema, part=part, fields_list=fields_list)
+                        for r in rows
+                    ]
+                else:
+                    rows_adapted = [
+                        adapt_trade_row(r, provider=provider, schema=schema, part=part, fields_list=fields_list)
+                        for r in rows
+                    ]
+                env = {**env, "rows": rows_adapted}
             loop.call_soon_threadsafe(asyncio.create_task, send_event(env))
         except RuntimeError:
             pass
@@ -206,16 +206,15 @@ async def ws_stream(
                 provider,
                 schema,
                 symbol,
-                emit_event=emit_event_sync,
+                emit=emit_event_sync,
                 fields=fields_list,
                 only_completed=(only_completed if only_completed is not None else is_bars),
                 start_ns=since_ns,
                 snapshot_batch=True,
             )
-        emit_event(
-            "fanout", f"{provider}:{schema}:{symbol}", "api", "INFO", "WS_ATTACH_OK",
-            "Client attached gapless", {"handle": handle, "watermark_ns": wm_ns}
-        )
+        _emit_event("INFO", "WS_ATTACH_OK", "Client attached gapless",
+                    {"handle": handle, "watermark_ns": wm_ns}
+                    )
     except Exception as e:
         # Send error frame + log
         try:
@@ -229,10 +228,7 @@ async def ws_stream(
             }))
         except Exception:
             pass
-        emit_event(
-            "fanout", f"{provider}:{schema}:{symbol}", "api", "ERROR", "WS_ATTACH_ERR",
-            "attach_gapless failed", {"error": str(e)}
-        )
+        _emit_event("ERROR", "WS_ATTACH_ERR","attach_gapless failed", {"error": str(e)})
         try:
             await ws.close(code=1011)
         except Exception:
@@ -255,7 +251,6 @@ async def ws_stream(
             await _do_unsubscribe()
         except Exception:
             pass
-        emit_event(
-            "fanout", f"{provider}:{schema}:{symbol}", "api", "INFO", "WS_DISCONNECTED",
-            "WebSocket client disconnected", {"handle": handle}
-        )
+        _emit_event("INFO", "WS_DISCONNECTED","WebSocket client disconnected",
+                    {"handle": handle}
+                    )

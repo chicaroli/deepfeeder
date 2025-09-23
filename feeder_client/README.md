@@ -60,9 +60,62 @@ feeder_client/
   pytest
   ```
 
+## Quick Start
+
+High-level Python client for connecting to the DeepFeeder fanout server (FastAPI + WebSockets) and receiving unified market data envelopes.
+
+### Requirements
+- Python 3.10+
+- websocket-client (installed via pyproject/uv)
+- For Deephaven ticking features, run the client on Linux if you need local DH features (not required for consuming WS).
+
+### Example
+```python
+from deepfeeder_client import DeepFeederClient
+
+client = DeepFeederClient("ws://localhost:8083/v1")
+
+# Rows callback: gets only snapshot/replay/live with rows
+def on_rows(phase, part, provider, schema, symbol, rows, meta):
+    print(f"{phase}/{part} rows={len(rows)} seq={meta.get('seq')}")
+    if rows:
+        print("  first row:", rows[0])
+
+# Envelope callback (optional): gets every envelope including connected / snapshot_boundary / error
+# def on_event(env: dict):
+#     print("env:", env)
+
+sub = client.subscribe(
+    "tradingview", "ohlcv_1m", "INDV2025",
+    fields="Timestamp,Open,High,Low,Close,Volume,Symbol,Exchange",
+    only_completed=True,   # set False if you want open-bar added/updated
+    on_new_data=on_rows,
+)
+
+# ... run your app ...
+
+# Stop subscription & cleanup all
+sub.stop()
+client.close()
+```
+
 ## Notes
-- The canonical table is not present in this version.
-- All code and features are designed for Linux environments only.
+- Envelopes follow: snapshot -> snapshot_boundary -> replay -> live.
+- Use only_completed=False to receive open-bar activity (added/updated), especially useful for delayed feeds.
+- To resume without resending snapshot, pass since_ns set to the last snapshot_boundary watermark_ns you observed.
+
+## Install / dev
+- With uv:
+
+```bash
+uv sync
+uv run python -c "from deepfeeder_client import DeepFeederClient; print('ok')"
+```
+
+## Troubleshooting
+- Ensure the server is up and reachable at the port you configured (default 8083 in docker-compose).
+- WS URL base should be the API prefix, e.g., `ws://localhost:8083/v1`.
+- If a connection closes early, check server event logs (WS_* codes) in the Deephaven UI tables.
 
 ## License
 See [LICENSE](../LICENSE) for details.
