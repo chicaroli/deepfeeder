@@ -1,63 +1,270 @@
 # filepath: feeder_client/src/bots/trading_bot.py
 """
-TradingBot using DeephavenConnector for table subscription and event handling.
+TradingBot: per-bot lifecycle with a supervisor thread, queue-based decoupling,
+and clean start/stop. Designed to work with DeepFeederClient.subscribe().
 """
-import time
-from connectors.deephaven_connector import DeephavenConnector, FeedListener
-from pydeephaven import listen
 
+from __future__ import annotations
+
+import threading
+import time
+from queue import Queue, Empty
+from typing import Optional, Protocol, Any, Callable
+
+from feeder_client import DeepFeederClient, Envelope, Bar, Trade
+from feeder_client.stream import Stream
+
+
+# ---- Strategy protocol (optional but handy) ---------------------------------
+
+class Strategy(Protocol):
+    """Minimal interface a strategy can implement; all methods are optional."""
+    name: Optional[str] = None
+    def on_start(self, bot: TradingBot) -> None: ...
+    def on_stop(self, bot: TradingBot) -> None: ...
+    def on_bar(self, bot: TradingBot, bar: Bar) -> None: ...
+    def on_trade(self, bot: TradingBot, trade: Trade) -> None: ...
+    def on_snapshot(self, bot: TradingBot, env: Envelope) -> None: ...
+    def on_snapshot_boundary(self, bot: TradingBot) -> None: ...
+    def on_event(self, bot: TradingBot, env: Envelope) -> None: ...
+
+
+# ---- TradingBot -------------------------------------------------------------
 
 class TradingBot:
     """
-    A trading bot that subscribes to a Deephaven table using DeephavenConnector and exposes on_price_update for pricing updates.
+    A trading bot that subscribes to DeepFeeder streams and invokes strategy hooks.
+
+    Key features:
+      - Dedicated supervisor thread per bot (lifecycle managed via start/stop).
+      - Internal Queue decouples client callback from strategy execution.
+      - Simple reconnect with exponential backoff.
+      - Pause / resume processing without dropping the subscription.
+      - Does NOT auto-close the shared DeepFeederClient unless own_client=True.
     """
-    def __init__(self, connector: DeephavenConnector, table_name: str):
-        """
-        Initialize the TradingBot.
-        Args:
-            connector (DeephavenConnector): Deephaven connector instance.
-            table_name (str): Name of the table to subscribe to.
-        """
-        self.connector = connector
-        self.table_name = table_name
-        self.table = None
-        self._subscribe()
 
-    def _subscribe(self):
-        """
-        Establish session and subscribe to the Deephaven table using BotListener and listen.
-        """
-        self.connector.establish_session()
-        self.table = self.connector.open_table(self.table_name)
-        self.listen_handle = listen(self.table, FeedListener(self.on_price_update))
-        self.listen_handle.start()
+    def __init__(
+        self,
+        stream: Stream,
+        deepfeeder_cli: DeepFeederClient,
+        *,
+        strategy: Optional[Strategy] = None,
+        queue_maxsize: int = 10_000,
+        auto_start: bool = True,
+    ):
+        self.stream = stream
+        self._client = deepfeeder_cli
+        self.strategy = strategy
+        self.name = strategy.name if strategy and strategy.name else f"GenericBot#{int(time.time())}"
 
-    def on_price_update(self, delta_type: str, row: dict):
-        """
-        Called on each pricing update from the table.
-        Args:
-            row (dict): The updated row data from the table.
-        """
-        # Default: print the row. Override in subclass for custom logic.
-        print(f"Pricing update ({delta_type}):", row)
+        # lifecycle / concurrency
+        self._q: Queue[Envelope|None] = Queue(maxsize=queue_maxsize)
+        self._stop = threading.Event()
+        self._paused = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._stream_handle = None
+        self._lock = threading.RLock()
 
-    def close(self):
-        """
-        Stop listening and close the Deephaven session.
-        """
-        if hasattr(self, "listen_handle"):
-            self.listen_handle.stop()
-        self.connector.close_session()
+        if auto_start:
+            self.start()
 
+    # --- Public API ----------------------------------------------------------
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop.clear()
+            self._paused.clear()
+            self._thread = threading.Thread(
+                target=self._run, name=self.name, daemon=True
+            )
+            self._thread.start()
+
+    def stop(self, join: bool = True, timeout: Optional[float] = 10.0) -> None:
+        with self._lock:
+            self._stop.set()
+            self._paused.clear()
+            self._unsubscribe_silent()
+            try:
+                self._q.put_nowait(None)    # wake consumer via sentinel
+            except Exception:
+                pass
+        if join and self._thread:
+            self._thread.join(timeout=timeout)
+        if self.strategy:
+            try:
+                self.strategy.on_stop(self)
+            except Exception as e:
+                print(f"[{self.name}] strategy.on_stop error: {e}")
+
+    def pause(self) -> None:
+        self._paused.set()
+
+    def resume(self) -> None:
+        self._paused.clear()
+
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive() and not self._stop.is_set()
+
+    def is_paused(self) -> bool:
+        return self._paused.is_set()
+
+    def __enter__(self) -> TradingBot:
+        if not self.is_running():
+            self.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.stop(join=True)
+
+    # --- Internal: supervisor runner ----------------------------------------
+
+    def _run(self) -> None:
+        if self.strategy:
+            try:
+                self.strategy.on_start(self)
+            except Exception as e:
+                print(f"[{self.name}] strategy.on_start error: {e}")
+
+        backoff = 0.5
+        while not self._stop.is_set():
+            try:
+                # ensure stream is subscribed
+                if self._stream_handle is None:
+                    self._subscribe()
+                backoff = 0.5           # reset backoff after a successful subscribe
+
+                env = self._q.get()     # blocks until callback enqueues -> immediate wakeup
+                if env is None:         # sentinel for shutdown
+                    break
+
+                # Pause gate (blocks here until resume)
+                if self._paused.is_set():
+                    self._paused.wait()
+
+                self._dispatch(env)
+
+            except Exception as e:
+                print(f"[{self.name}] run-loop error: {e}")
+                # if anything blows up, drop the handle and retry after backoff
+                self._unsubscribe_silent()
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 8.0)
+
+        self._unsubscribe_silent()
+
+    # --- Subscription and callback ------------------------------------------
+
+    def _subscribe(self) -> None:
+        self._stream_handle = self._client.subscribe(
+            **self.stream.to_subscribe_kwargs(),
+            on_data=self._on_data,
+        )
+        print(f"[{self.name}] Subscribed {self.stream.key} fields={self.stream.fields or 'default'}")
+
+    def _unsubscribe_silent(self) -> None:
+        if self._stream_handle is not None:
+            try:
+                self._client.unsubscribe(self._stream_handle)
+            except Exception as e:
+                print(f"[{self.name}] Unsubscribe error: {e}")
+            finally:
+                self._stream_handle = None
+
+    def _on_data(self, env: Envelope) -> None:
+        # Handoff from client thread -> consumer thread (immediate wake)
+        try:
+            self._q.put_nowait(env)
+        except Exception:
+            # Drop-oldest policy to avoid blocking the client's I/O thread
+            try:
+                _ = self._q.get_nowait()
+                self._q.put_nowait(env)
+            except Exception:
+                pass
+
+    # --- Dispatch to strategy ------------------------------------------------
+
+    def _dispatch(self, env: Envelope) -> None:
+        if not self.strategy:
+            # Default behavior: print something useful and return
+            print(f"[{self.name}] Event: {env}")
+            return
+
+        try:
+            # Common hook for phases if present
+            if env.is_snapshot:
+                self.strategy.on_snapshot(self, env)
+                return
+
+            if env.is_boundary:
+                self.strategy.on_snapshot_boundary(self)
+
+            if env.is_bar and env.rows:
+                for row in env.rows:
+                    # If you have a Bar dataclass, cast or validate here
+                    self.strategy.on_bar(self, row)  # type: ignore[arg-type]
+            elif env.is_trade and env.rows:
+                for row in env.rows:
+                    self.strategy.on_trade(self, row)
+            elif env.rows:
+                # Fallback catch-all
+                self.strategy.on_event(self, env)
+
+        except AttributeError:
+            # Strategy may not implement a method; ignore gracefully
+            pass
+        except Exception as e:
+            print(f"[{self.name}] dispatch error: {e}")
+
+
+# ---- Example usage ----------------------------------------------------------
 
 if __name__ == "__main__":
-    connector = DeephavenConnector()
-    table_name = "tb_tv_ohlcv_1m"  # Replace with your actual table name
-    bot = TradingBot(connector, table_name)
+    class PrintStrategy(Strategy):
+        name = "PrintStrategy"
+
+        def on_start(self, bot: TradingBot) -> None:
+            print(f"[on_start] {self.name} started.")
+
+        def on_stop(self, bot: TradingBot) -> None:
+            print(f"[on_stop] {self.name} stopped.")
+
+        def on_snapshot(self, bot: TradingBot, env: Envelope) -> None:
+            if env.rows:
+                print(f"[on_shapshot]: rows={len(env.rows)}")
+                for row in env.rows[:min(5, len(env.rows) - 5)]:
+                    print(f"... {row}")
+                    # print(env.row_type, env.phase, env.part, row.symbol, row.timestamp, row.close)
+
+        def on_snapshot_boundary(self, bot: TradingBot) -> None:
+            print(f"[on_snapshot_boundary] {self.name} snapshot boundary reached.")
+
+        def on_bar(self, bot: TradingBot, bar: Bar) -> None:
+            # Replace with real logic
+            print(f"[on_bar][{self.name}] {bar}")
+
+
+    cli = DeepFeederClient()
+    stream = Stream.bars(
+        provider="tradingview",
+        schema="ohlcv_1m",
+        symbol="INDV2025",
+        exchange="BMFBOVESPA",
+        fields=["Timestamp","Open","High","Low","Close","Volume","Symbol","Exchange","BarId"],
+        only_completed=True,
+    )
+    tbot = TradingBot(
+        stream=stream,
+        deepfeeder_cli=cli,
+        strategy=PrintStrategy(),
+    )
+
     try:
         print("TradingBot is running. Press Ctrl+C to exit.")
-        time.sleep(15)  # Listen for 15 seconds
+        time.sleep(5 * 60)
     except KeyboardInterrupt:
         print("Exiting...")
     finally:
-        bot.close()
+        tbot.stop(join=True)

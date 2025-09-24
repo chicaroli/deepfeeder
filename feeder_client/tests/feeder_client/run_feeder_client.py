@@ -6,16 +6,18 @@ from feeder_client.models import Envelope, Bar, Trade
 
 
 def on_data(env: Envelope):
-    print(env)
+    print(f"[on_data call]")
     if env.is_boundary:
         print("boundary", env.seq, env.watermark_ns)
         return
+    if env.is_snapshot:
+        print("snapshot", env.seq, env.watermark_ns)
     if env.rows and env.is_bar:
         for row in env.rows[:min(5, len(env.rows)-5)]:
-            print("bar", env.phase, env.part, row.symbol, row.timestamp, row.close)
+            print(".... bar", env.phase, env.part, row.symbol, row.timestamp, row.close)
     elif env.rows and env.is_trade:
         for row in env.rows[:min(5, len(env.rows) - 5)]:
-            print("trade", env.phase, env.part, row.symbol, row.timestamp, row.price)
+            print(".... trade", env.phase, env.part, row.symbol, row.timestamp, row.price)
 
 
 if __name__ == "__main__":

@@ -125,9 +125,10 @@ class Envelope(Generic[T]):
     @property
     def is_snapshot(self) -> bool: return self.phase == "snapshot"
     @property
-    def is_live(self) -> bool: return self.phase == "live"
-    @property
     def is_boundary(self) -> bool: return self.phase == "snapshot_boundary"
+    @property
+    def is_live(self) -> bool: return self.phase == "live"
+
     @property
     def is_bar(self) -> bool: return self.row_type == "bar"
     @property
