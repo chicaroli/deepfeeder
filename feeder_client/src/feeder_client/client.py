@@ -4,7 +4,7 @@ import threading
 import time
 import random
 from dataclasses import dataclass
-from typing import Callable, Optional, Dict, Any, Iterable, Sequence, Union
+from typing import Callable, Optional, Dict, Any, Sequence, Union
 from urllib.parse import urlencode
 
 from websocket import create_connection, WebSocket
@@ -18,8 +18,9 @@ DEFAULT_BASE_WS = "ws://localhost:8083/v1"
 OnData = Callable[[Envelope], None]
 
 
-def _stream_id(provider: str, schema: str, symbol: str) -> str:
-    return f"{provider}|{schema}|{symbol}"
+def _stream_id(provider: str, schema: str, symbol: str, exchange: Optional[str] = None) -> str:
+    # Include exchange in the id when present to avoid collisions across venues
+    return f"{provider}|{schema}|{symbol}" + (f"@{exchange.upper()}" if exchange else "")
 
 
 @dataclass
@@ -35,6 +36,7 @@ class DeepFeederStream:
     fields: Optional[str] = None
     only_completed: Optional[bool] = None
     since_ns: Optional[int] = None
+    exchange: Optional[str] = None
     on_data: Optional[OnData] = None
     timeout_s: float = 60.0
     idle_timeout_s: float = 45.0
@@ -53,7 +55,7 @@ class DeepFeederStream:
 
     @property
     def id(self) -> str:
-        return _stream_id(self.provider, self.schema, self.symbol)
+        return _stream_id(self.provider, self.schema, self.symbol, self.exchange)
 
     def is_running(self) -> bool:
         return bool(self.thread and self.thread.is_alive())
@@ -64,7 +66,7 @@ class DeepFeederStream:
         self.stop_evt.clear()
         self.thread = threading.Thread(
             target=self._run,
-            name=f"dfc-{self.provider}-{self.schema}-{self.symbol}",
+            name=f"dfc-{self.provider}-{self.schema}-{self.symbol}" + (f"-{self.exchange}" if self.exchange else ""),
             daemon=True,
         )
         self.thread.start()
@@ -92,6 +94,8 @@ class DeepFeederStream:
             params["fields"] = self.fields
         if self.only_completed is not None:
             params["only_completed"] = "true" if self.only_completed else "false"
+        if self.exchange:
+            params["exchange"] = self.exchange
         qs = urlencode(params)
         return f"{base}{path}?{qs}" if qs else f"{base}{path}"
 
@@ -205,6 +209,7 @@ class DeepFeederClient:
         fields: Optional[str] = None,
         only_completed: Optional[bool] = None,
         since_ns: Optional[int] = None,
+        exchange: Optional[str] = None,
         on_data: Optional[OnData] = None,
         timeout_s: Optional[float] = None,
         idle_timeout_s: Optional[float] = None,
@@ -220,6 +225,7 @@ class DeepFeederClient:
             fields=fields,
             only_completed=only_completed,
             since_ns=since_ns,
+            exchange=exchange,
             on_data=on_data,
             timeout_s=float(timeout_s) if timeout_s is not None else self._default_timeout_s,
             idle_timeout_s=float(idle_timeout_s) if idle_timeout_s is not None else self._default_idle_timeout_s,
@@ -249,8 +255,8 @@ class DeepFeederClient:
             pass
         return True
 
-    def unsubscribe_key(self, provider: str, schema: str, symbol: str) -> bool:
-        return self.unsubscribe(_stream_id(provider, schema, symbol))
+    def unsubscribe_key(self, provider: str, schema: str, symbol: str, exchange: Optional[str] = None) -> bool:
+        return self.unsubscribe(_stream_id(provider, schema, symbol, exchange))
 
     def close(self) -> int:
         """Stop all streams. Returns the number closed."""

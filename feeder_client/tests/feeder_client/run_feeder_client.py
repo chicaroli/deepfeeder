@@ -21,7 +21,10 @@ def on_data(env: Envelope):
 if __name__ == "__main__":
     client = DeepFeederClient()
     s = client.subscribe(
-        "tradingview", "ohlcv_1m", "INDV2025",
+        provider="tradingview",
+        schema="ohlcv_1m",
+        symbol="INDV2025",
+        exchange="BMFBOVESPA",
         fields="Timestamp,Open,High,Low,Close,Volume,Symbol,Exchange,BarId",
         only_completed=True,
         on_data=on_data,

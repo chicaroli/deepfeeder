@@ -38,10 +38,10 @@ class MarketFeeder:
         self._seqs: Dict[str, int] = {}
 
     @staticmethod
-    def _key(provider: str, schema: str, symbol: str) -> str:
+    def _key(provider: str, schema: str, symbol: str, exchange: Optional[str] = None) -> str:
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per subscription is allowed. 'symbol' must be a string.")
-        return f"{provider}|{schema}|{symbol}"
+        return f"{provider}|{schema}|{symbol}" + (f"@{exchange.upper()}" if exchange else "")
 
     def _next_seq(self, key: str) -> int:
         """Return next monotonic integer for this stream and increment it."""
@@ -49,8 +49,8 @@ class MarketFeeder:
         self._seqs[key] = v + 1
         return v
 
-    def _ensure_listener(self, provider: str, data_schema: str, symbol: str):
-        key = self._key(provider, data_schema, symbol)
+    def _ensure_listener(self, provider: str, data_schema: str, symbol: str, exchange: Optional[str] = None):
+        key = self._key(provider, data_schema, symbol, exchange)
         if key in self._lsn:
             return
         spec = SCHEMAS.get((provider, data_schema))
@@ -58,16 +58,11 @@ class MarketFeeder:
             raise ValueError(f"Unknown provider/schema: {provider}/{data_schema}")
         base = spec.table_fn()
         sym_expr = _symbol_filter_expr(spec, symbol)
-        # IMPORTANT: For bar (binned) schemas we must retain full history so that new bars arrive as ADDS;
-        # using last_by() here collapsed history to a single rolling row, causing only MODIFIED events and
-        # preventing completion detection.
-        if spec.bin_period_minutes:
-            view = base.where(sym_expr)
-        else:
-            # Non-bar (e.g., trades, quotes) can optionally keep all rows; leaving logic as-is (no last_by)
-            # If a future optimization is needed, last_by could be reintroduced behind a flag.
-            view = base.where(sym_expr)
+        view = base.where(sym_expr)
+        if exchange and "Exchange" in spec.cols:
+            view = view.where([f'Exchange == `{exchange.upper()}`'])
         view = view.view([*spec.cols])
+
         def emit_completed(msg: dict):
             for h, (k, cb, fields, only_completed) in list(self._handles.items()):
                 if k != key:
@@ -127,7 +122,8 @@ class MarketFeeder:
     def subscribe(self, provider: str, data_schema: str, symbol: str,
                   callback: Callable[[dict], None],
                   fields: Optional[Iterable[str]] = None,
-                  only_completed: bool = False) -> str:
+                  only_completed: bool = False,
+                  exchange: Optional[str] = None) -> str:
         """Subscribe to a symbol stream.
 
         Params:
@@ -137,9 +133,9 @@ class MarketFeeder:
         """
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per subscription is allowed. 'symbol' must be a string.")
-        key = self._key(provider, data_schema, symbol)
+        key = self._key(provider, data_schema, symbol, exchange)
         self._refs[key] = self._refs.get(key, 0) + 1
-        self._ensure_listener(provider, data_schema, symbol)
+        self._ensure_listener(provider, data_schema, symbol, exchange)
         handle = f"{key}:{id(callback)}"
         self._handles[handle] = (key, callback, set(fields) if fields else None, only_completed)
         self._subs.setdefault(key, set()).add(callback)
@@ -272,12 +268,14 @@ class MarketFeeder:
             data_schema: str,
             symbol: str,
             *,
+            exchange: Optional[str] = None,
             start_ns: Optional[int] = None,
             end_ns: Optional[int] = None,
             fields: Optional[Iterable[str]] = None,
     ) -> Iterator[dict]:
         """Convenience: iterate dict rows from snapshot_range()."""
-        arr = self.snapshot_range(provider, data_schema, symbol, start_ns=start_ns, end_ns=end_ns, fields=fields)
+        arr = self.snapshot_range(provider, data_schema, symbol, start_ns=start_ns, end_ns=end_ns, fields=fields,
+                                  exchange=exchange)
         yield from arr.to_pylist()
 
     def catchup_since_ns(
@@ -287,6 +285,7 @@ class MarketFeeder:
             symbol: str,
             since_ns: Optional[int],
             *,
+            exchange: Optional[str] = None,
             emit: Callable[[dict], None],
             fields: Optional[Iterable[str]] = None,
             only_completed: Optional[bool] = None,
@@ -297,7 +296,7 @@ class MarketFeeder:
         """
         if not isinstance(symbol, str):
             raise ValueError("Only one symbol per replay is allowed. 'symbol' must be a string.")
-        key = self._key(provider, data_schema, symbol)
+        key = self._key(provider, data_schema, symbol, exchange)
         lsn = self._lsn.get(key)
         if not lsn:
             return 0
@@ -400,6 +399,7 @@ class MarketFeeder:
             data_schema: str,
             symbol: str,
             *,
+            exchange: Optional[str] = None,
             emit: Callable[[dict], None],
             fields: Optional[Iterable[str]] = None,
             only_completed: bool = True,
@@ -419,7 +419,7 @@ class MarketFeeder:
         spec = SCHEMAS.get((provider, data_schema))
         if spec is None:
             raise ValueError(f"Unknown provider/schema: {provider}/{data_schema}")
-        key = self._key(provider, data_schema, symbol)
+        key = self._key(provider, data_schema, symbol, exchange)
         # Reset per-stream sequence at attach start
         self._seqs[key] = 0
 
@@ -437,7 +437,7 @@ class MarketFeeder:
                 pass
 
         handle = self.subscribe(provider, data_schema, symbol, callback=_live_cb,
-                                fields=fields, only_completed=only_completed)
+                                fields=fields, only_completed=only_completed, exchange=exchange)
 
         # Compute default start if not provided
         if start_ns is None:
@@ -449,7 +449,8 @@ class MarketFeeder:
             start_ns = int(day_start.value)
 
         # Snapshot as a single batched event (JSON rows)
-        snap_tbl = self.snapshot_range(provider, data_schema, symbol, start_ns=start_ns, fields=fields)
+        snap_tbl = self.snapshot_range(provider, data_schema, symbol, start_ns=start_ns, fields=fields,
+                                       exchange=exchange)
         snap_rows = snap_tbl.to_pylist() if snap_tbl is not None else []
 
         # Compute watermark (robust logic) BEFORE emitting snapshot so clients can resume

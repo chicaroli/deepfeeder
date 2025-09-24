@@ -93,6 +93,7 @@ async def ws_stream(
     since_ns: Optional[int] = Query(None, description="resume watermark (epoch ns)"),
     fields: Optional[str] = Query(None, description="comma-separated column list to project"),
     only_completed: Optional[bool] = Query(None, description="bars default True; trades default False"),
+    exchange: Optional[str] = Query(None),
 ):
     def _emit_event(level: str, code: str, message: str, details: dict):
         emit_event(
@@ -120,6 +121,7 @@ async def ws_stream(
             "data_schema": schema,
             "symbol": symbol,
             "since_ns": since_ns,
+            "exchange": exchange,
         }))
     except Exception as e:
         print(f"[ws_stream] failed to send connected ack: {e!r}")
@@ -212,6 +214,7 @@ async def ws_stream(
                 only_completed=(only_completed if only_completed is not None else is_bars),
                 start_ns=since_ns,
                 snapshot_batch=True,
+                exchange=exchange,
             )
         _emit_event("INFO", "WS_ATTACH_OK", "Client attached gapless",
                     {"handle": handle, "watermark_ns": wm_ns}
