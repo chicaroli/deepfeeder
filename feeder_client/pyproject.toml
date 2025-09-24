@@ -1,5 +1,5 @@
 [project]
-name = "deepfeeder-client"
+name = "feeder-client"
 version = "1.0.0"
 description = "DeepFeeder is a real-time market data feeder framework built on Deephaven"
 readme = "README.md"

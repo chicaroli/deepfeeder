@@ -70,16 +70,19 @@ High-level Python client for connecting to the DeepFeeder fanout server (FastAPI
 - For Deephaven ticking features, run the client on Linux if you need local DH features (not required for consuming WS).
 
 ### Example
+
 ```python
-from deepfeeder_client import DeepFeederClient
+from feeder_client import DeepFeederClient
 
 client = DeepFeederClient("ws://localhost:8083/v1")
+
 
 # Rows callback: gets only snapshot/replay/live with rows
 def on_rows(phase, part, provider, schema, symbol, rows, meta):
     print(f"{phase}/{part} rows={len(rows)} seq={meta.get('seq')}")
     if rows:
         print("  first row:", rows[0])
+
 
 # Envelope callback (optional): gets every envelope including connected / snapshot_boundary / error
 # def on_event(env: dict):
@@ -88,7 +91,7 @@ def on_rows(phase, part, provider, schema, symbol, rows, meta):
 sub = client.subscribe(
     "tradingview", "ohlcv_1m", "INDV2025",
     fields="Timestamp,Open,High,Low,Close,Volume,Symbol,Exchange",
-    only_completed=True,   # set False if you want open-bar added/updated
+    only_completed=True,  # set False if you want open-bar added/updated
     on_new_data=on_rows,
 )
 

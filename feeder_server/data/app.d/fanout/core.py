@@ -17,6 +17,7 @@ from runtime.heartbeat import Heartbeater
 from runtime.eventlog import emit_event
 from .listener import _SymListener
 from .schemas import SCHEMAS
+from .protocol import envelope_header, ROW_TYPE_TRADE, ROW_TYPE_BAR
 from .utils import _symbol_filter_expr, _filter_fields
 
 
@@ -260,7 +261,8 @@ class MarketFeeder:
 
         # Column filtering (case-insensitive)
         if fields:
-            keep = [n for n in arr.schema.names if n in fields or n in ["Symbol", "Timestamp"]]
+            must_keep = {spec.time_col, spec.symbol_col}
+            keep = [n for n in arr.schema.names if n in fields or n in must_keep]
             arr = arr.select(keep) if keep else pa.table({})
         return arr
 
@@ -351,6 +353,7 @@ class MarketFeeder:
         meta.setdefault("data_schema", data_schema)
         meta.setdefault("symbol", symbol)
         meta.setdefault("only_completed", False)
+        spec = SCHEMAS.get((provider, data_schema))
         if fields:
             try:
                 meta.setdefault("fields", list(fields))
@@ -371,13 +374,14 @@ class MarketFeeder:
                 # Fallback: deliver empty if conversion fails
                 rows = []
             env = {
-                "version": 1,
+                **envelope_header(),
                 "phase": phase,
                 "part": part,
                 "provider": provider,
                 "data_schema": data_schema,
                 "symbol": symbol,
                 "row_mode": True,
+                "row_type": ROW_TYPE_BAR if spec.bin_period_minutes else ROW_TYPE_TRADE,
                 "rows": rows,
                 "watermark_ns": None if phase != "snapshot" else watermark_ns,
                 "meta": {**meta, "seq": self._next_seq(key)},
@@ -474,13 +478,14 @@ class MarketFeeder:
         # Emit snapshot event(s) including watermark_ns so clients can resume
         if snapshot_batch:
             env = {
-                "version": 1,
+                **envelope_header(),
                 "phase": "snapshot",
                 "part": "completed",  # snapshot contains completed history
                 "provider": provider,
                 "data_schema": data_schema,
                 "symbol": symbol,
                 "row_mode": True,
+                "row_type": ROW_TYPE_BAR if spec.bin_period_minutes else ROW_TYPE_TRADE,
                 "rows": snap_rows,
                 "watermark_ns": wm_ns,
                 "meta": {
@@ -498,13 +503,14 @@ class MarketFeeder:
         else:
             for row in snap_rows:
                 env = {
-                    "version": 1,
+                    **envelope_header(),
                     "phase": "snapshot",
                     "part": "completed",
                     "provider": provider,
                     "data_schema": data_schema,
                     "symbol": symbol,
                     "row_mode": True,
+                    "row_type": ROW_TYPE_BAR if spec.bin_period_minutes else ROW_TYPE_TRADE,
                     "rows": [row],
                     "watermark_ns": wm_ns,
                     "meta": {
@@ -527,13 +533,14 @@ class MarketFeeder:
             pass
 
         boundary_env = {
-            "version": 1,
+            **envelope_header(),
             "phase": "snapshot_boundary",
             "part": None,
             "provider": provider,
             "data_schema": data_schema,
             "symbol": symbol,
             "row_mode": True,
+            "row_type": ROW_TYPE_BAR if spec.bin_period_minutes else ROW_TYPE_TRADE,
             "rows": [],
             "watermark_ns": wm_ns,
             "meta": {"seq": self._next_seq(key), "only_completed": bool(only_completed)},

@@ -9,6 +9,7 @@ from fanout.core import market_feeder, SCHEMAS
 from fanout.dh_ctx import use_dh_ctx
 from runtime.eventlog import emit_event
 from .runtime_bridge import adapt_bar_row, adapt_trade_row, _is_bar_schema
+from .protocol import envelope_header
 
 router = APIRouter()
 
@@ -113,7 +114,7 @@ async def ws_stream(
     # Send connected ack
     try:
         await ws.send_text(json.dumps({
-            "version": 1,
+            **envelope_header(),
             "phase": "connected",
             "provider": provider,
             "data_schema": schema,
@@ -219,7 +220,7 @@ async def ws_stream(
         # Send error frame + log
         try:
             await ws.send_text(json.dumps({
-                "version": 1,
+                **envelope_header(),
                 "phase": "error",
                 "message": str(e),
                 "provider": provider,
