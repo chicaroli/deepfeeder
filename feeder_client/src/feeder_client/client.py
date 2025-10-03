@@ -1,3 +1,11 @@
+"""
+feeder_client.client: Main client and stream worker for DeepFeeder market data.
+
+Contains:
+    - DeepFeederClient: Main entry point for connecting and subscribing to streams.
+    - DeepFeederStream: Per-stream worker for managing a single subscription.
+"""
+
 from __future__ import annotations
 import json
 import threading
@@ -28,6 +36,19 @@ class DeepFeederStream:
     """
     Public per-stream worker with a simple lifecycle (start/stop) and resume helpers.
     Users normally create this via DeepFeederClient.subscribe(...).
+
+    Attributes:
+        provider: Data provider name (e.g., 'binance', 'tradingview').
+        schema: Data schema (e.g., 'ohlcv_1m').
+        symbol: Market symbol (e.g., 'BTCUSD').
+        base_ws: WebSocket base URL.
+        fields: Optional comma-separated field list.
+        only_completed: If True, only completed bars are sent.
+        since_ns: Optional nanosecond timestamp to resume from.
+        exchange: Optional exchange name.
+        on_data: Callback for new data.
+        timeout_s: WebSocket timeout in seconds.
+        idle_timeout_s: Idle timeout in seconds.
     """
     provider: str
     schema: str

@@ -1,4 +1,10 @@
-# feeder_client/src/feeder_client/stream.py
+"""
+feeder_client.stream: Stream configuration helpers for DeepFeeder.
+
+Contains:
+    - Stream: Stream configuration dataclass with helpers for bars and trades.
+"""
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Iterable
@@ -6,6 +12,18 @@ from typing import Optional, Iterable
 
 @dataclass(frozen=True, slots=True)
 class Stream:
+    """
+    Stream configuration for a DeepFeeder data stream.
+
+    Attributes:
+        provider: Data provider name (e.g., 'binance').
+        schema: Data schema (e.g., 'ohlcv_1m', 'trades').
+        symbol: Market symbol (e.g., 'BTCUSD').
+        exchange: Optional exchange name.
+        fields: Tuple of field names to request.
+        only_completed: If True, only completed bars are sent.
+    """
+
     provider: str
     schema: str
     symbol: str
@@ -25,6 +43,20 @@ class Stream:
         fields: Iterable[str] = ("Timestamp", "Open", "High", "Low", "Close", "Volume", "BarId"),
         only_completed: bool | None = True,
     ) -> Stream:
+        """
+        Create a Stream configuration for OHLCV bars.
+
+        Args:
+            provider: Data provider name.
+            schema: Data schema name.
+            symbol: Market symbol.
+            exchange: Optional exchange name.
+            fields: Iterable of field names for the OHLCV data.
+            only_completed: If True, only completed bars are included.
+
+        Returns:
+            Stream: Configured Stream instance for bars.
+        """
         return Stream(
             provider=provider,
             schema=schema,
@@ -42,6 +74,18 @@ class Stream:
         exchange: Optional[str] = None,
         fields: Iterable[str] = ("ts", "price", "qty", "trade_id"),
     ) -> Stream:
+        """
+        Create a Stream configuration for trades.
+
+        Args:
+            provider: Data provider name.
+            symbol: Market symbol.
+            exchange: Optional exchange name.
+            fields: Iterable of field names for the trade data.
+
+        Returns:
+            Stream: Configured Stream instance for trades.
+        """
         return Stream(
             provider=provider,
             schema="trades",

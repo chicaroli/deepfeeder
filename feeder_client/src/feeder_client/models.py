@@ -1,12 +1,22 @@
+"""
+feeder_client.models: Data models for DeepFeeder envelopes, bars, and trades.
+
+Contains:
+    - Bar: OHLCV bar data model.
+    - Trade: Trade data model.
+    - Envelope: Envelope for streaming data.
+    - adapt_envelope: Utility to adapt raw envelope dicts.
+"""
+
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Union, Literal, TypeVar, Generic
+from typing import Any, Dict, Optional, Sequence, Union, Literal, TypeVar, Generic
 from decimal import Decimal
 
 RowType = Literal["bar", "trade"]
 
-from .protocol import ensure_compat, ENVELOPE_VERSION
+from .protocol import ensure_compat
 
 Phase = Literal["connected", "snapshot", "snapshot_boundary", "live", "replay", "error"]
 Part  = Optional[Literal["added", "updated", "completed", "snapshot"]]
@@ -40,6 +50,19 @@ def _coerce_int(x: Any) -> Optional[int]:
 
 @dataclass(frozen=True)
 class Bar:
+    """
+    Represents an OHLCV bar for a given provider and symbol.
+
+    Attributes:
+        provider: Data provider name.
+        symbol: Market symbol.
+        timestamp: Bar timestamp (UTC).
+        open: Opening price.
+        high: High price.
+        low: Low price.
+        close: Closing price.
+        volume: Volume for the bar.
+    """
     provider: str
     symbol: str
     timestamp: datetime
@@ -76,6 +99,21 @@ class Bar:
 
 @dataclass(frozen=True)
 class Trade:
+    """
+    Represents a trade for a given provider and symbol.
+
+    Attributes:
+        provider: Data provider name.
+        symbol: Market symbol.
+        timestamp: Trade timestamp (UTC).
+        price: Trade price.
+        quantity: Trade quantity.
+        trade_id: Unique identifier for the trade.
+        exchange: Exchange where the trade occurred.
+        is_buyer_maker: Indicates if the buyer is the market maker.
+        buyer_id: Identifier for the buyer.
+        seller_id: Identifier for the seller.
+    """
     provider: str
     symbol: str
     timestamp: datetime
@@ -110,6 +148,22 @@ T = TypeVar("T", Bar, Trade)
 
 @dataclass(frozen=True)
 class Envelope(Generic[T]):
+    """
+    Represents an envelope containing a batch of rows (bars or trades) for a given provider and symbol.
+
+    Attributes:
+        version: Protocol version.
+        phase: Current phase of the envelope (e.g., live, snapshot).
+        part: Indicates if this is a new, updated, or completed snapshot.
+        provider: Data provider name.
+        schema: Schema of the data.
+        symbol: Market symbol.
+        rows: Sequence of rows (bars or trades).
+        row_type: Type of the rows contained (bar or trade).
+        seq: Optional sequence number for the envelope.
+        watermark_ns: Optional watermark in nanoseconds.
+        raw_meta: Optional raw metadata dictionary.
+    """
     version: int
     phase: Phase
     part: Part
@@ -149,6 +203,15 @@ class Envelope(Generic[T]):
 
 
 def adapt_envelope(env: Dict[str, Any]) -> Envelope[Union[Bar, Trade]]:
+    """
+    Adapts a raw envelope dictionary from the server to a typed Envelope object.
+
+    Args:
+        env: Raw envelope dictionary.
+
+    Returns:
+        A typed Envelope object containing either Bar or Trade rows.
+    """
     server_ver = int(env.get("version", 1))
     ensure_compat(server_ver)  # warn/raise according to policy
 

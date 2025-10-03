@@ -22,7 +22,7 @@
     "name": "b3_futures",
     "symbols": [
       "BMFBOVESPA:INDV2025", "BMFBOVESPA:WINV2025",
-      "BMFBOVESPA:DOLV2025", "BMFBOVESPA:WDOV2025",
+      "BMFBOVESPA:DOLX2025", "BMFBOVESPA:WDOX2025",
       "BMFBOVESPA:DI1Z2025", "BMFBOVESPA:DI1N2026"
     ],
     "streams": ["quotes", "bars"],

@@ -16,49 +16,41 @@ feeder_client/
 ├── pyproject.toml       # Project metadata and dependencies
 ├── uv.lock              # Locked dependencies for reproducible builds
 ├── src/                 # Source code for the client
-│   ├── ticking.py       # Ticking logic for Deephaven integration
-│   └── connectors/
-│       └── deephaven_connector.py  # Deephaven connector implementation
+│   └── feeder_client/   # Main package
+│       ├── client.py
+│       ├── models.py
+│       ├── protocol.py
+│       ├── stream.py
+│       └── trading_bot.py
 ├── tests/               # Test suite
 │   ├── __init__.py
 │   └── connectors/
 │       └── test_deephaven_connector.py
 ```
 
-## Development
+## Installation
 
-### Prerequisites
+Install via [uv](https://github.com/astral-sh/uv) or pip:
+
 ```sh
-  uv pip install -e feeder_client
+uv pip install feeder_client
+# or for development
+uv pip install -e feeder_client
 ```
 
-- Docker and Docker Compose
-- VSCode (recommended for remote development)
-- **Linux host or container required for Deephaven Ticking support**
+- Python 3.10+ required
+- A running Deephaven server is needed for full functionality.
 
-> **Note:** The DeepFeeder Client must run on Linux due to Deephaven Ticking dependencies. Running on Windows or macOS is not supported for this feature.
+## Using as a Library
 
-### Getting Started
-1. **Build and start the container:**
-   ```sh
-   docker compose up --build
-   ```
-2. **Access the container:**
-   - Use VSCode Remote - Containers, or
-   - Run `docker exec -it feeder-client bash`
-3. **Install dependencies:**
-   - Dependencies are installed automatically if you build the image with `pyproject.toml` and `uv.lock` copied.
-   - For live development (with volume mapping), run inside the container:
-     ```sh
-     uv sync
-     ```
+You can use DeepFeeder Client in your own Python projects after installation:
 
-### Running Tests
+```python
+from feeder_client import DeepFeederClient
 
-- Run tests inside the container using:
-  ```sh
-  pytest
-  ```
+client = DeepFeederClient("ws://localhost:8083/v1")
+# ... use client.subscribe(...) as shown below ...
+```
 
 ## Quick Start
 
@@ -102,18 +94,42 @@ sub.stop()
 client.close()
 ```
 
+## Versioning and API Stability
+
+This package follows semantic versioning. The public API is defined by the classes and functions exported in `feeder_client/__init__.py`. Breaking changes will only occur in major version updates.
+
 ## Notes
 - Envelopes follow: snapshot -> snapshot_boundary -> replay -> live.
 - Use only_completed=False to receive open-bar activity (added/updated), especially useful for delayed feeds.
 - To resume without resending snapshot, pass since_ns set to the last snapshot_boundary watermark_ns you observed.
 
-## Install / dev
-- With uv:
+## Development
 
-```bash
-uv sync
-uv run python -c "from deepfeeder_client import DeepFeederClient; print('ok')"
-```
+### Prerequisites
+- Docker and Docker Compose
+- VSCode (recommended for remote development)
+
+### Getting Started
+1. **Build and start the container:**
+   ```sh
+   docker compose up --build
+   ```
+2. **Access the container:**
+   - Use VSCode Remote - Containers, or
+   - Run `docker exec -it feeder-client bash`
+3. **Install dependencies:**
+   - Dependencies are installed automatically if you build the image with `pyproject.toml` and `uv.lock` copied.
+   - For live development (with volume mapping), run inside the container:
+     ```sh
+     uv sync
+     ```
+
+### Running Tests
+
+- Run tests inside the container using:
+  ```sh
+  pytest
+  ```
 
 ## Troubleshooting
 - Ensure the server is up and reachable at the port you configured (default 8083 in docker-compose).

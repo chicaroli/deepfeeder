@@ -1,15 +1,17 @@
-# filepath: feeder_client/src/bots/trading_bot.py
 """
-TradingBot: per-bot lifecycle with a supervisor thread, queue-based decoupling,
-and clean start/stop. Designed to work with DeepFeederClient.subscribe().
+feeder_client.trading_bot: Trading bot framework for DeepFeeder streams.
+
+Contains:
+    - Strategy: Protocol for trading strategies.
+    - TradingBot: Bot lifecycle and event dispatch for DeepFeeder streams.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from queue import Queue, Empty
-from typing import Optional, Protocol, Any, Callable
+from queue import Queue
+from typing import Optional, Protocol
 
 from feeder_client import DeepFeederClient, Envelope, Bar, Trade
 from feeder_client.stream import Stream
@@ -18,14 +20,27 @@ from feeder_client.stream import Stream
 # ---- Strategy protocol (optional but handy) ---------------------------------
 
 class Strategy(Protocol):
-    """Minimal interface a strategy can implement; all methods are optional."""
+    """
+    Minimal interface a strategy can implement; all methods are optional.
+
+    Attributes:
+        name: Optional name for the strategy.
+    Methods:
+        on_start(bot): Called when the bot starts.
+        on_stop(bot): Called when the bot stops.
+        on_snapshot(bot, env): Called on snapshot envelope.
+        on_snapshot_boundary(bot): Called on snapshot boundary.
+        on_bar(bot, bar): Called on new bar.
+        on_trade(bot, trade): Called on new trade.
+        on_event(bot, env): Called on any envelope event.
+    """
     name: Optional[str] = None
     def on_start(self, bot: TradingBot) -> None: ...
     def on_stop(self, bot: TradingBot) -> None: ...
-    def on_bar(self, bot: TradingBot, bar: Bar) -> None: ...
-    def on_trade(self, bot: TradingBot, trade: Trade) -> None: ...
     def on_snapshot(self, bot: TradingBot, env: Envelope) -> None: ...
     def on_snapshot_boundary(self, bot: TradingBot) -> None: ...
+    def on_bar(self, bot: TradingBot, bar: Bar) -> None: ...
+    def on_trade(self, bot: TradingBot, trade: Trade) -> None: ...
     def on_event(self, bot: TradingBot, env: Envelope) -> None: ...
 
 
@@ -41,19 +56,24 @@ class TradingBot:
       - Simple reconnect with exponential backoff.
       - Pause / resume processing without dropping the subscription.
       - Does NOT auto-close the shared DeepFeederClient unless own_client=True.
+
+    Args:
+        deepfeeder_cli: DeepFeederClient instance.
+        stream: Stream configuration.
+        strategy: Optional strategy implementing the Strategy protocol.
     """
 
     def __init__(
         self,
-        stream: Stream,
         deepfeeder_cli: DeepFeederClient,
-        *,
+        stream: Stream,
         strategy: Optional[Strategy] = None,
+        *,
         queue_maxsize: int = 10_000,
         auto_start: bool = True,
     ):
         self.stream = stream
-        self._client = deepfeeder_cli
+        self.client = deepfeeder_cli
         self.strategy = strategy
         self.name = strategy.name if strategy and strategy.name else f"GenericBot#{int(time.time())}"
 
@@ -157,7 +177,7 @@ class TradingBot:
     # --- Subscription and callback ------------------------------------------
 
     def _subscribe(self) -> None:
-        self._stream_handle = self._client.subscribe(
+        self._stream_handle = self.client.subscribe(
             **self.stream.to_subscribe_kwargs(),
             on_data=self._on_data,
         )
@@ -166,7 +186,7 @@ class TradingBot:
     def _unsubscribe_silent(self) -> None:
         if self._stream_handle is not None:
             try:
-                self._client.unsubscribe(self._stream_handle)
+                self.client.unsubscribe(self._stream_handle)
             except Exception as e:
                 print(f"[{self.name}] Unsubscribe error: {e}")
             finally:
@@ -247,17 +267,16 @@ if __name__ == "__main__":
 
 
     cli = DeepFeederClient()
-    stream = Stream.bars(
-        provider="tradingview",
-        schema="ohlcv_1m",
-        symbol="INDV2025",
-        exchange="BMFBOVESPA",
-        fields=["Timestamp","Open","High","Low","Close","Volume","Symbol","Exchange","BarId"],
-        only_completed=True,
-    )
     tbot = TradingBot(
-        stream=stream,
         deepfeeder_cli=cli,
+        stream=Stream.bars(
+            provider="tradingview",
+            schema="ohlcv_1m",
+            symbol="INDV2025",
+            exchange="BMFBOVESPA",
+            fields=["Timestamp", "Open", "High", "Low", "Close", "Volume", "Symbol", "Exchange", "BarId"],
+            only_completed=True,
+        ),
         strategy=PrintStrategy(),
     )
 
